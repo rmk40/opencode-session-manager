@@ -5,6 +5,7 @@ import {
   useContext,
   useReducer,
   useEffect,
+  useMemo,
   ReactNode,
 } from "react";
 import {
@@ -205,6 +206,29 @@ interface AppStateProviderProps {
 export function AppStateProvider({ children }: AppStateProviderProps) {
   const [state, dispatch] = useReducer(stateReducer, initialState);
 
+  // Implement action batching to prevent TUI flickering from high-frequency updates
+  const actionQueue = useMemo<StateAction[]>(() => [], []);
+  const batchTimeout = useMemo<{ timer: NodeJS.Timeout | null }>(
+    () => ({ timer: null }),
+    [],
+  );
+
+  const batchedDispatch = (action: StateAction) => {
+    actionQueue.push(action);
+
+    if (!batchTimeout.timer) {
+      batchTimeout.timer = setTimeout(() => {
+        batchTimeout.timer = null;
+        if (actionQueue.length > 0) {
+          // React 18 batches multiple dispatches in a single task
+          const batch = [...actionQueue];
+          actionQueue.length = 0;
+          batch.forEach((a) => dispatch(a));
+        }
+      }, 50); // 50ms batching window
+    }
+  };
+
   // Helper functions
   const selectSession = (sessionId?: string) => {
     dispatch({ type: "SELECT_SESSION", sessionId });
@@ -292,31 +316,31 @@ export function AppStateProvider({ children }: AppStateProviderProps) {
   // Set up connection manager event listeners
   useEffect(() => {
     const handleServerDiscovered = (server: Server) => {
-      dispatch({ type: "ADD_SERVER", server });
+      batchedDispatch({ type: "ADD_SERVER", server });
     };
 
     const handleServerUpdated = (server: Server) => {
-      dispatch({ type: "UPDATE_SERVER", server });
+      batchedDispatch({ type: "UPDATE_SERVER", server });
     };
 
     const handleServerRemoved = (serverId: string) => {
-      dispatch({ type: "REMOVE_SERVER", serverId });
+      batchedDispatch({ type: "REMOVE_SERVER", serverId });
     };
 
     const handleSessionAdded = (session: Session) => {
-      dispatch({ type: "ADD_SESSION", session });
+      batchedDispatch({ type: "ADD_SESSION", session });
     };
 
     const handleSessionUpdated = (session: Session) => {
-      dispatch({ type: "UPDATE_SESSION", session });
+      batchedDispatch({ type: "UPDATE_SESSION", session });
     };
 
     const handleSessionRemoved = (sessionId: string) => {
-      dispatch({ type: "REMOVE_SESSION", sessionId });
+      batchedDispatch({ type: "REMOVE_SESSION", sessionId });
     };
 
     const handleError = (error: AppError) => {
-      dispatch({ type: "SET_ERROR", error });
+      batchedDispatch({ type: "SET_ERROR", error });
     };
 
     // Add event listeners

@@ -233,10 +233,6 @@ export class HTTPClient {
     }
 
     try {
-      if (this.config.debug) {
-        console.log(`SDK session.list() and session.status() ${this.baseUrl}`);
-      }
-
       // Fetch both list and status in parallel
       const [listResponse, statusResponse] = await Promise.all([
         this.sdkClient.session.list(),
@@ -293,15 +289,7 @@ export class HTTPClient {
     }
 
     try {
-      if (this.config.debug) {
-        console.log(`SDK session.status() ${this.baseUrl}`);
-      }
-
       const response = await this.sdkClient.session.status();
-
-      if (this.config.debug) {
-        console.log(`SDK response:`, response);
-      }
 
       return {
         success: true,
@@ -339,26 +327,11 @@ export class HTTPClient {
     }
 
     try {
-      if (this.config.debug) {
-        console.log(`SDK session.get() and session.messages() ${sessionId}`);
-      }
-
       // Fetch both session info and messages
       const [sessionResponse, messagesResponse] = await Promise.all([
         this.sdkClient.session.get({ path: { id: sessionId } }),
         this.sdkClient.session.messages({ path: { id: sessionId } }),
       ]);
-
-      if (this.config.debug) {
-        console.log(
-          `SDK session.get response:`,
-          JSON.stringify(sessionResponse.data).slice(0, 100),
-        );
-        console.log(
-          `SDK session.messages count:`,
-          messagesResponse.data?.length,
-        );
-      }
 
       if (!sessionResponse.data) {
         return {
@@ -430,10 +403,6 @@ export class HTTPClient {
     }
 
     try {
-      if (this.config.debug) {
-        console.log(`SDK session.abort() ${sessionId}`);
-      }
-
       await this.sdkClient.session.abort({
         path: { id: sessionId },
       });

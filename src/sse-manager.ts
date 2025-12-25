@@ -8,7 +8,6 @@ import {
   Result,
   AppError,
 } from "./types";
-import { getConfig } from "./config";
 import { httpClientPool } from "./http-client";
 
 // ---------------------------------------------------------------------------
@@ -51,7 +50,6 @@ export interface SSEConnectionState {
 
 export class SSEConnectionManager extends EventEmitter {
   private connections = new Map<string, SSEConnectionState>();
-  private config = getConfig();
   private reconnectTimers = new Map<string, NodeJS.Timeout>();
 
   constructor() {
@@ -146,11 +144,7 @@ export class SSEConnectionManager extends EventEmitter {
   /**
    * Handle event from SDK
    */
-  private handleSDKEvent(serverUrl: string, event: any): void {
-    if (this.config.debugFlags.sse) {
-      console.log(`SSE event from ${serverUrl}:`, event);
-    }
-
+  private handleSDKEvent(_serverUrl: string, event: any): void {
     // Map SDK events to our internal events
     // Based on opencode SDK types.gen.ts
     const type = event.type;
@@ -265,12 +259,6 @@ export class SSEConnectionManager extends EventEmitter {
 
     state.status = "reconnecting";
     state.reconnectAttempts++;
-
-    if (this.config.debugFlags.sse) {
-      console.log(
-        `SSE reconnecting to ${serverUrl} in ${delay}ms (attempt ${state.reconnectAttempts})`,
-      );
-    }
 
     this.emit("reconnecting", serverUrl, state.reconnectAttempts);
 

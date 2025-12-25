@@ -194,20 +194,30 @@ export function LayoutProvider({
 
   // Listen for terminal resize events
   useEffect(() => {
+    let resizeTimer: NodeJS.Timeout | null = null;
+
     const handleResize = () => {
-      updateSize({
-        width: process.stdout.columns || 80,
-        height: process.stdout.rows || 24,
-      });
+      if (resizeTimer) clearTimeout(resizeTimer);
+
+      resizeTimer = setTimeout(() => {
+        updateSize({
+          width: process.stdout.columns || 80,
+          height: process.stdout.rows || 24,
+        });
+      }, 100); // 100ms debounce
     };
 
     process.stdout.on("resize", handleResize);
 
     // Initial size update
-    handleResize();
+    updateSize({
+      width: process.stdout.columns || 80,
+      height: process.stdout.rows || 24,
+    });
 
     return () => {
       process.stdout.off("resize", handleResize);
+      if (resizeTimer) clearTimeout(resizeTimer);
     };
   }, []);
 

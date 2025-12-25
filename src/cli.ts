@@ -1,7 +1,12 @@
 // Command-line interface and runtime modes
 
-import { parseArgs } from "node:util";
-import { existsSync, writeFileSync, readFileSync } from "node:fs";
+import { parseArgs, format } from "node:util";
+import {
+  existsSync,
+  writeFileSync,
+  readFileSync,
+  createWriteStream,
+} from "node:fs";
 import { join } from "node:path";
 import { getConfig } from "./config";
 import { debugLogger, enableDebugMode, enableTraceMode } from "./debug-utils";
@@ -205,6 +210,22 @@ export function showVersion(): void {
 // ---------------------------------------------------------------------------
 
 export async function runTUIMode(options: CLIOptions): Promise<void> {
+  // Redirect console to log file to prevent TUI flickering from background logs
+  try {
+    const logPath = options.logFile || getConfig().logFile;
+    const logStream = createWriteStream(logPath, { flags: "a" });
+    const logToFile = (msg: any, ...args: any[]) => {
+      const formatted = format(msg, ...args) + "\n";
+      logStream.write(`[${new Date().toISOString()}] ${formatted}`);
+    };
+    console.log = logToFile;
+    console.error = logToFile;
+    console.warn = logToFile;
+    console.debug = logToFile;
+  } catch (e) {
+    // Fallback if log file is not writable
+  }
+
   if (options.debug) enableDebugMode();
   if (options.trace) enableTraceMode();
 
