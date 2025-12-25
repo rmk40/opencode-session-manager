@@ -15,34 +15,10 @@ import {
   ViewMode,
   GroupMode,
   SortMode,
-  NotificationState,
   AppError,
+  StateAction,
 } from "./types";
 import { connectionManager } from "./connection-manager";
-
-// ---------------------------------------------------------------------------
-// State Actions
-// ---------------------------------------------------------------------------
-
-export type StateAction =
-  | { type: "SET_SERVERS"; servers: Map<string, Server> }
-  | { type: "ADD_SERVER"; server: Server }
-  | { type: "UPDATE_SERVER"; server: Server }
-  | { type: "REMOVE_SERVER"; serverId: string }
-  | { type: "SET_SESSIONS"; sessions: Map<string, Session> }
-  | { type: "ADD_SESSION"; session: Session }
-  | { type: "UPDATE_SESSION"; session: Session }
-  | { type: "REMOVE_SESSION"; sessionId: string }
-  | { type: "SELECT_SESSION"; sessionId?: string }
-  | { type: "SET_VIEW"; view: ViewMode }
-  | { type: "SET_GROUP_BY"; groupBy: GroupMode }
-  | { type: "SET_SORT_BY"; sortBy: SortMode }
-  | { type: "TOGGLE_SHOW_ONLY_ACTIVE" }
-  | { type: "TOGGLE_GROUP_EXPANDED"; groupId: string }
-  | { type: "SET_NOTIFICATIONS"; notifications: NotificationState }
-  | { type: "ADD_NOTIFICATION"; sessionId: string }
-  | { type: "CLEAR_NOTIFICATION"; sessionId: string }
-  | { type: "SET_ERROR"; error: AppError | null };
 
 // ---------------------------------------------------------------------------
 // State Reducer
@@ -50,41 +26,38 @@ export type StateAction =
 
 function stateReducer(state: AppState, action: StateAction): AppState {
   switch (action.type) {
+    case "BATCH":
+      return action.actions.reduce(stateReducer, state);
+
     case "SET_SERVERS":
       return { ...state, servers: action.servers };
 
     case "ADD_SERVER":
-      const newServers = new Map(state.servers);
-      newServers.set(action.server.id, action.server);
-      return { ...state, servers: newServers };
-
-    case "UPDATE_SERVER":
+    case "UPDATE_SERVER": {
       const updatedServers = new Map(state.servers);
       updatedServers.set(action.server.id, action.server);
       return { ...state, servers: updatedServers };
+    }
 
-    case "REMOVE_SERVER":
+    case "REMOVE_SERVER": {
       const remainingServers = new Map(state.servers);
       remainingServers.delete(action.serverId);
       return { ...state, servers: remainingServers };
+    }
 
     case "SET_SESSIONS":
       return { ...state, sessions: action.sessions };
 
     case "ADD_SESSION":
-      const newSessions = new Map(state.sessions);
-      newSessions.set(action.session.id, action.session);
-      return { ...state, sessions: newSessions };
-
-    case "UPDATE_SESSION":
+    case "UPDATE_SESSION": {
       const updatedSessions = new Map(state.sessions);
       updatedSessions.set(action.session.id, action.session);
       return { ...state, sessions: updatedSessions };
+    }
 
-    case "REMOVE_SESSION":
+    case "REMOVE_SESSION": {
       const remainingSessions = new Map(state.sessions);
       remainingSessions.delete(action.sessionId);
-      // Clear selection if removed session was selected
       const selectedSessionId =
         state.selectedSessionId === action.sessionId
           ? undefined
@@ -94,6 +67,7 @@ function stateReducer(state: AppState, action: StateAction): AppState {
         sessions: remainingSessions,
         selectedSessionId,
       };
+    }
 
     case "SELECT_SESSION":
       return { ...state, selectedSessionId: action.sessionId };
@@ -110,7 +84,7 @@ function stateReducer(state: AppState, action: StateAction): AppState {
     case "TOGGLE_SHOW_ONLY_ACTIVE":
       return { ...state, showOnlyActive: !state.showOnlyActive };
 
-    case "TOGGLE_GROUP_EXPANDED":
+    case "TOGGLE_GROUP_EXPANDED": {
       const expandedGroups = new Set(state.expandedGroups);
       if (expandedGroups.has(action.groupId)) {
         expandedGroups.delete(action.groupId);
@@ -118,11 +92,12 @@ function stateReducer(state: AppState, action: StateAction): AppState {
         expandedGroups.add(action.groupId);
       }
       return { ...state, expandedGroups };
+    }
 
     case "SET_NOTIFICATIONS":
       return { ...state, notifications: action.notifications };
 
-    case "ADD_NOTIFICATION":
+    case "ADD_NOTIFICATION": {
       const newLastNotified = new Map(state.notifications.lastNotified);
       newLastNotified.set(action.sessionId, Date.now());
       return {
@@ -132,8 +107,9 @@ function stateReducer(state: AppState, action: StateAction): AppState {
           lastNotified: newLastNotified,
         },
       };
+    }
 
-    case "CLEAR_NOTIFICATION":
+    case "CLEAR_NOTIFICATION": {
       const clearedLastNotified = new Map(state.notifications.lastNotified);
       clearedLastNotified.delete(action.sessionId);
       return {
@@ -143,6 +119,7 @@ function stateReducer(state: AppState, action: StateAction): AppState {
           lastNotified: clearedLastNotified,
         },
       };
+    }
 
     case "SET_ERROR":
       return { ...state, error: action.error };
@@ -220,10 +197,9 @@ export function AppStateProvider({ children }: AppStateProviderProps) {
       batchTimeout.timer = setTimeout(() => {
         batchTimeout.timer = null;
         if (actionQueue.length > 0) {
-          // React 18 batches multiple dispatches in a single task
           const batch = [...actionQueue];
           actionQueue.length = 0;
-          batch.forEach((a) => dispatch(a));
+          dispatch({ type: "BATCH", actions: batch });
         }
       }, 50); // 50ms batching window
     }
@@ -264,9 +240,7 @@ export function AppStateProvider({ children }: AppStateProviderProps) {
     message: string,
   ): Promise<void> => {
     try {
-      // Use connection manager to send message
       const result = await connectionManager.sendMessage(sessionId, message);
-
       if (!result.success) {
         throw new Error(result.error?.message || "Failed to send message");
       }
@@ -283,9 +257,7 @@ export function AppStateProvider({ children }: AppStateProviderProps) {
 
   const abortSession = async (sessionId: string): Promise<void> => {
     try {
-      // Use connection manager to abort session
       const result = await connectionManager.abortSession(sessionId);
-
       if (!result.success) {
         throw new Error(result.error?.message || "Failed to abort session");
       }
@@ -339,6 +311,10 @@ export function AppStateProvider({ children }: AppStateProviderProps) {
       batchedDispatch({ type: "REMOVE_SESSION", sessionId });
     };
 
+    const handleBatchUpdate = (actions: StateAction[]) => {
+      batchedDispatch({ type: "BATCH", actions });
+    };
+
     const handleError = (error: AppError) => {
       batchedDispatch({ type: "SET_ERROR", error });
     };
@@ -350,6 +326,7 @@ export function AppStateProvider({ children }: AppStateProviderProps) {
     connectionManager.on("session_added", handleSessionAdded);
     connectionManager.on("session_updated", handleSessionUpdated);
     connectionManager.on("session_removed", handleSessionRemoved);
+    connectionManager.on("batch_update", handleBatchUpdate);
     connectionManager.on("error", handleError);
 
     // Start connection manager
@@ -375,6 +352,7 @@ export function AppStateProvider({ children }: AppStateProviderProps) {
       connectionManager.off("session_added", handleSessionAdded);
       connectionManager.off("session_updated", handleSessionUpdated);
       connectionManager.off("session_removed", handleSessionRemoved);
+      connectionManager.off("batch_update", handleBatchUpdate);
       connectionManager.off("error", handleError);
 
       connectionManager.stop();

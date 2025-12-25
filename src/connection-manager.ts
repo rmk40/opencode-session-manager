@@ -13,6 +13,7 @@ import {
   SessionUpdateEvent,
   MessageEvent,
   PermissionRequestEvent,
+  StateAction,
 } from "./types";
 import { UDPDiscovery } from "./udp-discovery";
 import { SSEConnectionManager } from "./sse-manager";
@@ -30,6 +31,7 @@ export interface ConnectionManagerEvents {
   session_updated: [session: Session];
   session_added: [session: Session];
   session_removed: [sessionId: string];
+  batch_update: [actions: StateAction[]];
   error: [error: AppError];
 }
 
@@ -265,10 +267,17 @@ export class ConnectionManager extends EventEmitter {
       server.sessions = sessionsResult.data!;
 
       this.servers.set(serverId, server);
-      this.emit("server_updated", server);
 
-      // Update sessions
-      this.updateSessionsFromServer(server);
+      // Update sessions and get actions
+      const sessionActions = this.updateSessionsFromServer(server);
+
+      // Emit combined batch update
+      const allActions: StateAction[] = [
+        { type: "UPDATE_SERVER", server },
+        ...sessionActions,
+      ];
+
+      this.emit("batch_update", allActions);
 
       return { success: true };
     } catch (error) {
@@ -669,7 +678,7 @@ export class ConnectionManager extends EventEmitter {
   /**
    * Update sessions from server data
    */
-  private updateSessionsFromServer(server: Server): void {
+  private updateSessionsFromServer(server: Server): StateAction[] {
     const existingSessionIds = new Set(
       Array.from(this.sessions.values())
         .filter((s) => s.serverId === server.id)
@@ -677,6 +686,7 @@ export class ConnectionManager extends EventEmitter {
     );
 
     const newSessionIds = new Set(server.sessions.map((s) => s.id));
+    const actions: StateAction[] = [];
 
     // Add new sessions
     for (const session of server.sessions) {
@@ -690,11 +700,11 @@ export class ConnectionManager extends EventEmitter {
             session.messages.length > 0 ? session.messages : existing.messages,
         };
         this.sessions.set(session.id, updated);
-        this.emit("session_updated", updated);
+        actions.push({ type: "UPDATE_SESSION", session: updated });
       } else {
         // Add new session
         this.sessions.set(session.id, session);
-        this.emit("session_added", session);
+        actions.push({ type: "ADD_SESSION", session });
       }
     }
 
@@ -702,9 +712,11 @@ export class ConnectionManager extends EventEmitter {
     for (const sessionId of existingSessionIds) {
       if (!newSessionIds.has(sessionId)) {
         this.sessions.delete(sessionId);
-        this.emit("session_removed", sessionId);
+        actions.push({ type: "REMOVE_SESSION", sessionId });
       }
     }
+
+    return actions;
   }
 
   /**

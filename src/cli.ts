@@ -1,17 +1,17 @@
 // Command-line interface and runtime modes
 
-import { parseArgs, format } from "node:util";
-import {
-  existsSync,
-  writeFileSync,
-  readFileSync,
-  createWriteStream,
-} from "node:fs";
-import { join } from "node:path";
+import { parseArgs } from "node:util";
+import { existsSync, writeFileSync, readFileSync } from "node:fs";
+import { join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 import { getConfig } from "./config";
 import { debugLogger, enableDebugMode, enableTraceMode } from "./debug-utils";
 import { headlessRunner, builtInScenarios } from "./headless-mode";
 import { mockServerManager } from "./mock-server";
+
+// Polyfill __dirname for ESM
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
 
 // ---------------------------------------------------------------------------
 // CLI Configuration
@@ -39,7 +39,7 @@ export function parseCliArgs(
   args: string[] = process.argv.slice(2),
 ): CLIOptions {
   try {
-    const { values, positionals } = parseArgs({
+    const { values } = parseArgs({
       args,
       options: {
         mode: {
@@ -54,12 +54,10 @@ export function parseCliArgs(
         debug: {
           type: "boolean",
           short: "d",
-          default: false,
         },
         trace: {
           type: "boolean",
           short: "t",
-          default: false,
         },
         "log-file": {
           type: "string",
@@ -70,7 +68,6 @@ export function parseCliArgs(
         },
         daemonize: {
           type: "boolean",
-          default: false,
         },
         "mock-servers": {
           type: "string",
@@ -81,45 +78,42 @@ export function parseCliArgs(
         help: {
           type: "boolean",
           short: "h",
-          default: false,
         },
         version: {
           type: "boolean",
           short: "v",
-          default: false,
         },
       },
+      strict: false,
       allowPositionals: true,
     });
 
-    // Parse mode from positional arguments if provided
-    const mode =
-      (positionals[0] as CLIOptions["mode"]) ||
-      (values.mode as CLIOptions["mode"]);
+    // Check for positional mode (e.g., opencode-session-monitor daemon)
+    let mode = (values.mode as any) || "tui";
+    if (args.length > 0 && !args[0].startsWith("-")) {
+      mode = args[0];
+    }
 
     return {
-      mode,
-      port: values.port ? parseInt(values.port, 10) : undefined,
-      debug: values.debug,
-      trace: values.trace,
-      logFile: values["log-file"],
-      pidFile: values["pid-file"],
-      daemonize: values.daemonize,
+      mode: mode as any,
+      port: values.port ? parseInt(values.port as string, 10) : undefined,
+      debug: !!values.debug,
+      trace: !!values.trace,
+      logFile: values["log-file"] as string,
+      pidFile: values["pid-file"] as string,
+      daemonize: !!values.daemonize,
       mockServers: values["mock-servers"]
-        ? parseInt(values["mock-servers"], 10)
+        ? parseInt(values["mock-servers"] as string, 10)
         : undefined,
       testScenarios: values["test-scenarios"]
-        ? values["test-scenarios"].split(",")
+        ? (values["test-scenarios"] as string).split(",")
         : undefined,
-      help: values.help,
-      version: values.version,
+      help: !!values.help,
+      version: !!values.version,
     };
   } catch (error) {
-    console.error(
-      "Error parsing command line arguments:",
-      error instanceof Error ? error.message : error,
-    );
-    process.exit(1);
+    console.error("Error parsing arguments:", error);
+    return { mode: "tui", help: true };
   }
 }
 
@@ -129,8 +123,6 @@ export function parseCliArgs(
 
 export function showHelp(): void {
   const help = `
-OpenCode Session Monitor - TUI for monitoring OpenCode instances and sessions
-
 USAGE:
   opencode-session-monitor [MODE] [OPTIONS]
 
@@ -148,52 +140,12 @@ OPTIONS:
   -d, --debug                 Enable debug logging
   -t, --trace                 Enable trace logging (very verbose)
   -l, --log-file <file>       Log file path (default: logs/opencode-monitor.log)
-      --pid-file <file>       PID file for daemon mode (default: opencode-monitor.pid)
+      --pid-file <file>       PID file for daemon mode
       --daemonize             Run as background daemon
-      --mock-servers <count>  Number of mock servers to create (mock mode)
-      --test-scenarios <list> Comma-separated list of test scenarios to run
-  -h, --help                  Show this help message
+      --mock-servers <count>  Number of mock servers to create
+      --test-scenarios <list> Comma-separated test scenarios
+  -h, --help                  Show help message
   -v, --version               Show version information
-
-EXAMPLES:
-  # Start TUI interface
-  opencode-session-monitor
-
-  # Run in daemon mode with notifications
-  opencode-session-monitor daemon --daemonize
-
-  # Start with debug logging
-  opencode-session-monitor --debug
-
-  # Run automated tests
-  opencode-session-monitor test --test-scenarios server_discovery,session_management
-
-  # Start mock servers for testing
-  opencode-session-monitor mock --mock-servers 3
-
-  # Check status
-  opencode-session-monitor status
-
-DAEMON MODE:
-  In daemon mode, the monitor runs in the background and sends desktop notifications
-  for important events like session completion, errors, and permission requests.
-  Use --daemonize to fork into background, or run in foreground for debugging.
-
-DEBUG MODE:
-  Debug mode enables verbose logging and packet inspection. Use --trace for
-  even more detailed logging. Logs are written to the specified log file.
-
-TEST MODE:
-  Test mode runs automated scenarios to validate functionality. Available scenarios:
-  - server_discovery: Test server discovery and connection
-  - session_management: Test session loading and management  
-  - ui_state_management: Test UI state changes and navigation
-
-MOCK MODE:
-  Mock mode starts fake OpenCode servers for testing and development.
-  Servers will announce themselves via UDP and provide realistic session data.
-
-For more information, visit: https://github.com/opencode/session-monitor
 `;
   console.log(help.trim());
 }
@@ -210,22 +162,6 @@ export function showVersion(): void {
 // ---------------------------------------------------------------------------
 
 export async function runTUIMode(options: CLIOptions): Promise<void> {
-  // Redirect console to log file to prevent TUI flickering from background logs
-  try {
-    const logPath = options.logFile || getConfig().logFile;
-    const logStream = createWriteStream(logPath, { flags: "a" });
-    const logToFile = (msg: any, ...args: any[]) => {
-      const formatted = format(msg, ...args) + "\n";
-      logStream.write(`[${new Date().toISOString()}] ${formatted}`);
-    };
-    console.log = logToFile;
-    console.error = logToFile;
-    console.warn = logToFile;
-    console.debug = logToFile;
-  } catch (e) {
-    // Fallback if log file is not writable
-  }
-
   if (options.debug) enableDebugMode();
   if (options.trace) enableTraceMode();
 
@@ -283,7 +219,7 @@ export async function runDaemonMode(options: CLIOptions): Promise<void> {
 }
 
 export async function runDebugMode(options: CLIOptions): Promise<void> {
-  enableDebugMode();
+  if (options.debug) enableDebugMode();
   if (options.trace) enableTraceMode();
 
   debugLogger.info("Starting debug mode");
@@ -309,7 +245,7 @@ export async function runDebugMode(options: CLIOptions): Promise<void> {
 
   // Start TUI with debug overlay
   const { default: main } = await import("./app");
-  main();
+  await main();
 
   // Log performance metrics periodically
   setInterval(() => {
@@ -329,7 +265,7 @@ export async function runTestMode(options: CLIOptions): Promise<void> {
   let scenariosToRun = builtInScenarios;
   if (options.testScenarios) {
     scenariosToRun = builtInScenarios.filter((scenario) =>
-      options.testScenarios!.includes(scenario.name),
+      options.testScenarios!.some((pattern) => scenario.name.includes(pattern)),
     );
 
     if (scenariosToRun.length === 0) {
@@ -343,11 +279,11 @@ export async function runTestMode(options: CLIOptions): Promise<void> {
   }
 
   console.log(`Running ${scenariosToRun.length} test scenarios...`);
-
   await headlessRunner.runScenarios(scenariosToRun);
-
-  // Generate and display report
   const report = JSON.parse(headlessRunner.generateReport());
+
+  // Write report to file
+  writeFileSync("test-report.json", JSON.stringify(report, null, 2));
 
   console.log("\n=== Test Results ===");
   console.log(`Total: ${report.summary.total}`);
@@ -358,20 +294,16 @@ export async function runTestMode(options: CLIOptions): Promise<void> {
 
   if (report.summary.failed > 0) {
     console.log("\n=== Failed Tests ===");
-    report.results.forEach((result: any, index: number) => {
-      if (!result.success) {
+    (report.results as any[])
+      .filter((r: any) => !r.success)
+      .forEach((result: any, index: number) => {
         console.log(`Test ${index + 1}: ${result.errors.join(", ")}`);
-      }
-    });
+      });
   }
 
-  // Save detailed report
-  headlessRunner.saveReport();
   console.log("\nDetailed report saved to test-report.json");
 
   await headlessRunner.stop();
-
-  // Exit with error code if tests failed
   process.exit(report.summary.failed > 0 ? 1 : 0);
 }
 
@@ -379,59 +311,55 @@ export async function runMockMode(options: CLIOptions): Promise<void> {
   if (options.debug) enableDebugMode();
   if (options.trace) enableTraceMode();
 
-  const serverCount = options.mockServers || 2;
-
-  debugLogger.info(`Starting mock mode with ${serverCount} servers`);
+  const serverCount = options.mockServers || 3;
   console.log(`Starting ${serverCount} mock OpenCode servers...`);
 
-  const servers = [];
+  const promises = [];
   for (let i = 0; i < serverCount; i++) {
     const serverId = `mock-server-${i + 1}`;
-    const serverName = `Mock OpenCode Server ${i + 1}`;
+    const serverName = `Mock Server ${i + 1}`;
     const port = 9000 + i;
+    promises.push(mockServerManager.createServer(serverId, serverName, port));
+  }
+  await Promise.all(promises);
 
-    const server = await mockServerManager.createServer(
-      serverId,
-      serverName,
-      port,
-    );
-    servers.push(server);
-
-    console.log(`Started ${serverName} on port ${port}`);
+  // Print server info
+  const servers = mockServerManager.getServers();
+  for (const server of servers) {
+    const info = server.getServerInfo();
+    console.log(`Started ${info.serverName} on port ${info.port}`);
   }
 
   console.log("\nMock servers are running. Press Ctrl+C to stop.");
-
-  // Keep process alive
-  process.on("SIGTERM", async () => {
-    console.log("\nShutting down mock servers...");
-    await mockServerManager.stopAll();
-    process.exit(0);
-  });
 
   process.on("SIGINT", async () => {
     console.log("\nShutting down mock servers...");
     await mockServerManager.stopAll();
     process.exit(0);
   });
+
+  process.on("SIGTERM", async () => {
+    console.log("\nShutting down mock servers...");
+    await mockServerManager.stopAll();
+    process.exit(0);
+  });
 }
 
-export async function runStatusMode(options: CLIOptions): Promise<void> {
+export async function runStatusMode(_options: CLIOptions): Promise<void> {
+  const config = getConfig();
+
   console.log("OpenCode Session Monitor Status");
   console.log("================================");
-
-  const config = getConfig();
   console.log(`UDP Port: ${config.port}`);
   console.log(`Debug Mode: ${config.debug}`);
   console.log(`Log File: ${config.logFile}`);
   console.log(`PID File: ${config.pidFile}`);
 
   // Check if daemon is running
-  const pidFile = options.pidFile || config.pidFile;
-  if (existsSync(pidFile)) {
-    const pid = readFileSync(pidFile, "utf-8").trim();
+  if (existsSync(config.pidFile)) {
+    const pid = parseInt(readFileSync(config.pidFile, "utf-8"), 10);
     try {
-      process.kill(parseInt(pid, 10), 0); // Check if process exists
+      process.kill(pid, 0);
       console.log(`Daemon Status: Running (PID: ${pid})`);
     } catch {
       console.log("Daemon Status: Not running (stale PID file)");
@@ -440,18 +368,15 @@ export async function runStatusMode(options: CLIOptions): Promise<void> {
     console.log("Daemon Status: Not running");
   }
 
-  // Try to discover servers
   console.log("\nDiscovering OpenCode servers...");
-  const { connectionManager } = await import("./connection-manager");
 
+  const { connectionManager } = await import("./connection-manager");
   await connectionManager.start();
 
-  // Wait a bit for discovery
+  // Wait a few seconds for discovery
   await new Promise((resolve) => setTimeout(resolve, 3000));
 
   const servers = connectionManager.getServers();
-  const sessions = connectionManager.getSessions();
-
   console.log(`\nServers Found: ${servers.size}`);
   for (const [_, server] of servers) {
     console.log(
@@ -459,16 +384,14 @@ export async function runStatusMode(options: CLIOptions): Promise<void> {
     );
   }
 
+  const sessions = connectionManager.getSessions();
   console.log(`\nSessions Found: ${sessions.size}`);
   const activeSessions = connectionManager.getActiveSessions();
   console.log(`Active Sessions: ${activeSessions.length}`);
 
   await connectionManager.stop();
+  process.exit(0);
 }
-
-// ---------------------------------------------------------------------------
-// Daemon Utilities
-// ---------------------------------------------------------------------------
 
 async function daemonize(_options: CLIOptions): Promise<void> {
   // Fork into background

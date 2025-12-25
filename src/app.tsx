@@ -1,6 +1,6 @@
 // Main application component and layout for OpenCode Session Monitor
 
-import { useEffect, useState, useMemo } from "react";
+import React, { useEffect, useState, useMemo } from "react";
 import { render, Box, Text, useInput, useApp } from "ink";
 import { Marked } from "marked";
 // @ts-ignore
@@ -20,28 +20,35 @@ function createMarkedRenderer(width: number) {
       width: Math.max(20, width),
       reflowText: true,
       showSectionPrefix: false,
-    }),
+    }) as any,
   );
 }
+
+// ---------------------------------------------------------------------------
+// Spinner Component
+// ---------------------------------------------------------------------------
+
+const LoadingSpinner = React.memo(({ isBusy }: { isBusy: boolean }) => {
+  const [frame, setFrame] = useState(0);
+  const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
+  useEffect(() => {
+    if (!isBusy) return;
+    const timer = setInterval(() => setFrame((f) => (f + 1) % 10), 100);
+    return () => clearInterval(timer);
+  }, [isBusy]);
+
+  if (!isBusy) return null;
+  return <Text color="yellow">{SPINNER_FRAMES[frame]} </Text>;
+});
 
 // ---------------------------------------------------------------------------
 // Header Component
 // ---------------------------------------------------------------------------
 
-function Header() {
+const Header = React.memo(() => {
   const { layout, truncateText } = useLayout();
   const { state } = useAppState();
-
-  // Localized spinner state to prevent root-level flickering
-  const [spinnerFrame, setSpinnerFrame] = useState(0);
-  const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-
-  useEffect(() => {
-    const timer = setInterval(() => {
-      setSpinnerFrame((f) => (f + 1) % 10);
-    }, 100);
-    return () => clearInterval(timer);
-  }, []);
 
   const serverCount = state.servers.size;
   const sessions = Array.from(state.sessions.values());
@@ -59,11 +66,7 @@ function Header() {
     <Box flexDirection="column" height={layout.dimensions.headerHeight}>
       <Box justifyContent="center" borderStyle="double" borderColor="blue">
         <Text bold color="blue" wrap="truncate-end">
-          {isBusy ? (
-            <Text color="yellow">{SPINNER_FRAMES[spinnerFrame]} </Text>
-          ) : (
-            ""
-          )}
+          <LoadingSpinner isBusy={isBusy} />
           {truncateText("OpenCode Session Monitor", availableWidth)}
         </Text>
       </Box>
@@ -85,13 +88,13 @@ function Header() {
       </Box>
     </Box>
   );
-}
+});
 
 // ---------------------------------------------------------------------------
 // Footer Component
 // ---------------------------------------------------------------------------
 
-function Footer() {
+const Footer = React.memo(() => {
   const { layout, truncateText } = useLayout();
   const { state } = useAppState();
 
@@ -123,7 +126,7 @@ function Footer() {
       )}
     </Box>
   );
-}
+});
 
 // ---------------------------------------------------------------------------
 // Session List Component
@@ -276,7 +279,6 @@ function SessionList() {
             const server = state.servers.get(session.serverId);
 
             // Calculate available width for name
-            // layout.size.width - 2 (root border) - 2 (row padding) - 3 (status) - 15 (server) - 1 (safety)
             const nameWidth = Math.max(10, layout.size.width - 23);
 
             return (
@@ -337,7 +339,7 @@ function SessionView() {
     ? state.sessions.get(state.selectedSessionId)
     : undefined;
 
-  // Initialized marked once per width change
+  // Initialize marked once per width change
   const marked = useMemo(
     () => createMarkedRenderer(layout.size.width - 12),
     [layout.size.width],
@@ -348,19 +350,18 @@ function SessionView() {
     if (!session) return [];
 
     const lines: any[] = [];
-    const termWidth = layout.size.width;
 
     // Header line
     lines.push({
       type: "session-header",
       content: `Monitoring: ${session.name}`,
+      id: "header",
     });
-    lines.push({ type: "spacer" });
+    lines.push({ type: "spacer", id: "s1" });
 
     for (const msg of session.messages) {
       const parts = msg.parts || [];
 
-      // Skip empty assistant messages (healthchecks/heartbeats/ghost blocks)
       if (
         msg.role === "assistant" &&
         parts.length === 0 &&
@@ -378,33 +379,39 @@ function SessionView() {
         type: "msg-header",
         content: `┌─ ${role}${cost}`,
         role: msg.role,
+        id: msg.id,
       });
 
-      // Track if we need a spacer before the next part
       let needsSpacer = false;
 
-      // If there are no parts, use raw content
       if (parts.length === 0 && msg.content) {
         const rendered = String(marked.parse(String(msg.content)));
-        for (const line of rendered.trim().split("\n")) {
-          lines.push({ type: "msg-body", content: line });
+        const split = rendered.trim().split("\n");
+        for (let j = 0; j < split.length; j++) {
+          lines.push({
+            type: "msg-body",
+            content: split[j],
+            id: `${msg.id}-c-${j}`,
+          });
         }
         needsSpacer = true;
       }
 
       for (let i = 0; i < parts.length; i++) {
         const part = parts[i];
+        const partKey = `${msg.id}-p${i}`;
 
-        // Add a vertical spacer line between distinct parts
         if (needsSpacer) {
-          lines.push({ type: "msg-body", content: "" });
+          lines.push({
+            type: "msg-body",
+            content: "",
+            id: `${partKey}-spacer`,
+          });
         }
         needsSpacer = true;
 
         if (part.type === "text") {
           const text = part.text || part.content || "";
-
-          // Detect structured JSON in text parts
           let displayContent = text;
           if (text.trim().startsWith("{") && text.trim().endsWith("}")) {
             try {
@@ -415,8 +422,13 @@ function SessionView() {
           }
 
           const rendered = String(marked.parse(displayContent));
-          for (const line of rendered.trim().split("\n")) {
-            lines.push({ type: "msg-body", content: line });
+          const split = rendered.trim().split("\n");
+          for (let j = 0; j < split.length; j++) {
+            lines.push({
+              type: "msg-body",
+              content: split[j],
+              id: `${partKey}-${j}`,
+            });
           }
         } else if (part.type === "tool" || part.type === "call") {
           const name = part.tool || part.toolName || "unknown";
@@ -428,53 +440,87 @@ function SessionView() {
           lines.push({
             type: "msg-tool-start",
             content: `┌─ ${icon} ${state.title || name}`,
+            id: `${partKey}-start`,
           });
 
           const args = formatToolArgs(state.input || part.toolArgs);
           if (args) {
-            for (const w of wrapText(args, termWidth - 14)) {
-              lines.push({ type: "msg-tool-body", content: w });
+            for (const w of wrapText(args, layout.size.width - 14)) {
+              lines.push({
+                type: "msg-tool-body",
+                content: w,
+                id: `${partKey}-arg`,
+              });
             }
           }
 
           if (status === "completed" && state.output) {
             const outLines = String(state.output).split("\n");
-            for (const line of outLines.slice(0, 10)) {
-              for (const w of wrapText(line, termWidth - 14)) {
-                lines.push({ type: "msg-tool-body", content: w });
+            for (let j = 0; j < Math.min(10, outLines.length); j++) {
+              for (const w of wrapText(outLines[j], layout.size.width - 14)) {
+                lines.push({
+                  type: "msg-tool-body",
+                  content: w,
+                  id: `${partKey}-out-${j}`,
+                });
               }
             }
             if (outLines.length > 10) {
-              lines.push({ type: "msg-tool-body", content: "..." });
+              lines.push({
+                type: "msg-tool-body",
+                content: "...",
+                id: `${partKey}-more`,
+              });
             }
           }
           lines.push({
             type: "msg-tool-end",
-            content: `└${"─".repeat(Math.min(30, termWidth - 14))}`,
+            content: `└${"─".repeat(Math.min(30, layout.size.width - 14))}`,
+            id: `${partKey}-end`,
           });
         } else if (part.type === "reasoning") {
           lines.push({
             type: "msg-reasoning-start",
             content: `┌─ Thinking...`,
+            id: `${partKey}-start`,
           });
           const text = part.reasoning || part.text || "";
           const rendered = String(marked.parse(text));
-          for (const line of rendered.trim().split("\n")) {
-            lines.push({ type: "msg-reasoning-body", content: line });
+          const split = rendered.trim().split("\n");
+          for (let j = 0; j < split.length; j++) {
+            lines.push({
+              type: "msg-reasoning-body",
+              content: split[j],
+              id: `${partKey}-${j}`,
+            });
           }
           lines.push({
             type: "msg-reasoning-end",
-            content: `└${"─".repeat(Math.min(30, termWidth - 14))}`,
+            content: `└${"─".repeat(Math.min(30, layout.size.width - 14))}`,
+            id: `${partKey}-end`,
           });
         } else if (part.type === "step-start") {
-          lines.push({ type: "msg-tool-start", content: `┌─ STEP STARTED` });
-          lines.push({ type: "msg-tool-end", content: `└${"─".repeat(30)}` });
+          lines.push({
+            type: "msg-tool-start",
+            content: `┌─ STEP STARTED`,
+            id: `${partKey}-start`,
+          });
+          lines.push({
+            type: "msg-tool-end",
+            content: `└${"─".repeat(30)}`,
+            id: `${partKey}-end`,
+          });
         } else if (part.type === "step-finish") {
-          lines.push({ type: "msg-tool-start", content: `┌─ STEP FINISHED` });
+          lines.push({
+            type: "msg-tool-start",
+            content: `┌─ STEP FINISHED`,
+            id: `${partKey}-start`,
+          });
           if ((part as any).reason) {
             lines.push({
               type: "msg-tool-body",
               content: `Reason: ${(part as any).reason}`,
+              id: `${partKey}-reason`,
             });
           }
           const costVal = (part as any).cost || (part as any).tokens?.cost;
@@ -482,48 +528,77 @@ function SessionView() {
             lines.push({
               type: "msg-tool-body",
               content: `Cost: $${Number(costVal).toFixed(4)}`,
+              id: `${partKey}-cost`,
             });
           }
-          lines.push({ type: "msg-tool-end", content: `└${"─".repeat(30)}` });
+          lines.push({
+            type: "msg-tool-end",
+            content: `└${"─".repeat(30)}`,
+            id: `${partKey}-end`,
+          });
         } else if (part.type === "patch") {
           const hash = (part as any).hash || "unknown";
           const files = (part as any).files || [];
           lines.push({
             type: "msg-tool-start",
             content: `┌─ PATCH [${hash.slice(0, 8)}]`,
+            id: `${partKey}-start`,
           });
           lines.push({
             type: "msg-tool-body",
             content: `${files.length} file(s) modified:`,
+            id: `${partKey}-files`,
           });
-          for (const file of files.slice(0, 5)) {
-            lines.push({ type: "msg-tool-body", content: `  • ${file}` });
+          for (let j = 0; j < Math.min(5, files.length); j++) {
+            lines.push({
+              type: "msg-tool-body",
+              content: `  • ${files[j]}`,
+              id: `${partKey}-f-${j}`,
+            });
           }
           if (files.length > 5) {
             lines.push({
               type: "msg-tool-body",
               content: `  ... and ${files.length - 5} more`,
+              id: `${partKey}-more`,
             });
           }
-          lines.push({ type: "msg-tool-end", content: `└${"─".repeat(30)}` });
+          lines.push({
+            type: "msg-tool-end",
+            content: `└${"─".repeat(30)}`,
+            id: `${partKey}-end`,
+          });
         } else if (part.type === "agent" || part.type === "subtask") {
           const name = (part as any).name || (part as any).agent || "unknown";
           const desc = (part as any).description || (part as any).prompt || "";
           lines.push({
             type: "msg-tool-start",
             content: `┌─ AGENT: ${name.toUpperCase()}`,
+            id: `${partKey}-start`,
           });
           if (desc) {
             const rendered = String(marked.parse(desc));
-            for (const line of rendered.trim().split("\n")) {
-              lines.push({ type: "msg-tool-body", content: line });
+            const split = rendered.trim().split("\n");
+            for (let j = 0; j < split.length; j++) {
+              lines.push({
+                type: "msg-tool-body",
+                content: split[j],
+                id: `${partKey}-${j}`,
+              });
             }
           }
-          lines.push({ type: "msg-tool-end", content: `└${"─".repeat(30)}` });
+          lines.push({
+            type: "msg-tool-end",
+            content: `└${"─".repeat(30)}`,
+            id: `${partKey}-end`,
+          });
         } else {
-          // Handle other part types
           const typeLabel = part.type.toUpperCase();
-          lines.push({ type: "msg-tool-start", content: `┌─ ${typeLabel}` });
+          lines.push({
+            type: "msg-tool-start",
+            content: `┌─ ${typeLabel}`,
+            id: `${partKey}-start`,
+          });
 
           const content =
             part.content ||
@@ -532,27 +607,34 @@ function SessionView() {
             (part as any).description ||
             JSON.stringify(part, null, 2);
 
-          for (const line of String(content).split("\n")) {
-            for (const w of wrapText(line, termWidth - 14)) {
-              lines.push({ type: "msg-tool-body", content: w });
+          const split = String(content).split("\n");
+          for (let j = 0; j < split.length; j++) {
+            for (const w of wrapText(split[j], layout.size.width - 14)) {
+              lines.push({
+                type: "msg-tool-body",
+                content: w,
+                id: `${partKey}-${j}`,
+              });
             }
           }
           lines.push({
             type: "msg-tool-end",
-            content: `└${"─".repeat(Math.min(30, termWidth - 14))}`,
+            content: `└${"─".repeat(Math.min(30, layout.size.width - 14))}`,
+            id: `${partKey}-end`,
           });
         }
       }
 
       lines.push({
         type: "msg-footer",
-        content: `└${"─".repeat(Math.min(40, termWidth - 10))}`,
+        content: `└${"─".repeat(Math.min(40, layout.size.width - 10))}`,
+        id: `${msg.id}-footer`,
       });
-      lines.push({ type: "spacer" });
+      lines.push({ type: "spacer", id: `${msg.id}-spacer` });
     }
 
     return lines;
-  }, [session, layout.size.width]);
+  }, [session, layout.size.width, marked]);
 
   // Auto-scroll to bottom
   useEffect(() => {
@@ -638,7 +720,7 @@ function SessionView() {
   );
 
   return (
-    <Box flexDirection="column" flexGrow={1}>
+    <Box flexDirection="column" flexGrow={1} paddingX={1}>
       <Box borderStyle="single" borderColor="gray" paddingX={1}>
         <Text bold>
           {truncateText(session.name, layout.dimensions.contentWidth - 30)}
@@ -666,7 +748,6 @@ function SessionView() {
         flexGrow={1}
         borderStyle="single"
         borderColor="gray"
-        paddingX={0}
         backgroundColor="#121212"
       >
         {renderedLines.length === 0 ? (
@@ -676,7 +757,10 @@ function SessionView() {
         ) : (
           <Box flexDirection="column" flexGrow={1}>
             {visibleLines.map((line, idx) => (
-              <RenderedLine key={`${scrollOffset}-${idx}`} line={line} />
+              <RenderedLine
+                key={`${line.id}-${scrollOffset + idx}`}
+                line={line}
+              />
             ))}
           </Box>
         )}
@@ -709,9 +793,9 @@ function SessionView() {
 // Rendered Line Component
 // ---------------------------------------------------------------------------
 
-function RenderedLine({ line }: { line: any }) {
+const RenderedLine = React.memo(({ line }: { line: any }) => {
   const { layout } = useLayout();
-  const availableWidth = layout.size.width - 4;
+  const availableWidth = layout.size.width - 6;
 
   switch (line.type) {
     case "session-header":
@@ -736,7 +820,7 @@ function RenderedLine({ line }: { line: any }) {
       );
     case "msg-body":
       return (
-        <Box width={availableWidth} paddingLeft={1} backgroundColor="#161616">
+        <Box width={availableWidth} backgroundColor="#161616">
           <Text color="#e0e0e0">{line.content === "" ? "│" : "│ "}</Text>
           <Box flexGrow={1}>
             <Text>{line.content}</Text>
@@ -745,31 +829,31 @@ function RenderedLine({ line }: { line: any }) {
       );
     case "msg-tool-start":
       return (
-        <Box width={availableWidth} paddingLeft={1} backgroundColor="#161616">
+        <Box width={availableWidth} backgroundColor="#161616">
           <Text color="#d4af37">│ {line.content}</Text>
         </Box>
       );
     case "msg-tool-body":
       return (
-        <Box width={availableWidth} paddingLeft={1} backgroundColor="#1a1a1a">
+        <Box width={availableWidth} backgroundColor="#1a1a1a">
           <Text color="#aaaaaa">│ │ {line.content}</Text>
         </Box>
       );
     case "msg-tool-end":
       return (
-        <Box width={availableWidth} paddingLeft={1} backgroundColor="#161616">
+        <Box width={availableWidth} backgroundColor="#161616">
           <Text color="#d4af37">│ {line.content}</Text>
         </Box>
       );
     case "msg-reasoning-start":
       return (
-        <Box width={availableWidth} paddingLeft={1} backgroundColor="#161616">
+        <Box width={availableWidth} backgroundColor="#161616">
           <Text color="#8b008b">│ {line.content}</Text>
         </Box>
       );
     case "msg-reasoning-body":
       return (
-        <Box width={availableWidth} paddingLeft={1} backgroundColor="#121212">
+        <Box width={availableWidth} backgroundColor="#121212">
           <Text italic color="#777777">
             │ │ {line.content}
           </Text>
@@ -777,13 +861,13 @@ function RenderedLine({ line }: { line: any }) {
       );
     case "msg-reasoning-end":
       return (
-        <Box width={availableWidth} paddingLeft={1} backgroundColor="#161616">
+        <Box width={availableWidth} backgroundColor="#161616">
           <Text color="#8b008b">│ {line.content}</Text>
         </Box>
       );
     case "msg-footer":
       return (
-        <Box width={availableWidth} paddingLeft={1} backgroundColor="#161616">
+        <Box width={availableWidth} backgroundColor="#161616">
           <Text color="#444444">{line.content}</Text>
         </Box>
       );
@@ -800,13 +884,13 @@ function RenderedLine({ line }: { line: any }) {
         </Box>
       );
   }
-}
+});
 
 // ---------------------------------------------------------------------------
 // Help View Component
 // ---------------------------------------------------------------------------
 
-function HelpView() {
+const HelpView = React.memo(() => {
   const helpText = [
     "OpenCode Session Monitor - Help",
     "",
@@ -849,7 +933,7 @@ function HelpView() {
       </Box>
     </Box>
   );
-}
+});
 
 // ---------------------------------------------------------------------------
 // Main Content Component
@@ -885,7 +969,6 @@ function MainContent() {
 
 function AppInner() {
   const { exit } = useApp();
-  const { layout } = useLayout();
 
   // Handle process signals
   useEffect(() => {
@@ -901,11 +984,10 @@ function AppInner() {
   return (
     <Box
       flexDirection="column"
-      width={layout.size.width}
-      height={layout.size.height}
-      borderStyle="single"
-      borderColor="blue"
+      flexGrow={1}
       backgroundColor="#0d0d0d"
+      paddingX={1}
+      paddingY={1}
     >
       <Header />
       <MainContent />

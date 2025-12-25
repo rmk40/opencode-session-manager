@@ -188,6 +188,27 @@ export type ViewMode = "list" | "session" | "help";
 export type GroupMode = "none" | "project" | "server";
 export type SortMode = "name" | "activity" | "created" | "cost";
 
+export type StateAction =
+  | { type: "SET_SERVERS"; servers: Map<string, Server> }
+  | { type: "ADD_SERVER"; server: Server }
+  | { type: "UPDATE_SERVER"; server: Server }
+  | { type: "REMOVE_SERVER"; serverId: string }
+  | { type: "SET_SESSIONS"; sessions: Map<string, Session> }
+  | { type: "ADD_SESSION"; session: Session }
+  | { type: "UPDATE_SESSION"; session: Session }
+  | { type: "REMOVE_SESSION"; sessionId: string }
+  | { type: "SELECT_SESSION"; sessionId?: string }
+  | { type: "SET_VIEW"; view: ViewMode }
+  | { type: "SET_GROUP_BY"; groupBy: GroupMode }
+  | { type: "SET_SORT_BY"; sortBy: SortMode }
+  | { type: "TOGGLE_SHOW_ONLY_ACTIVE" }
+  | { type: "TOGGLE_GROUP_EXPANDED"; groupId: string }
+  | { type: "SET_NOTIFICATIONS"; notifications: NotificationState }
+  | { type: "ADD_NOTIFICATION"; sessionId: string }
+  | { type: "CLEAR_NOTIFICATION"; sessionId: string }
+  | { type: "SET_ERROR"; error: AppError | null }
+  | { type: "BATCH"; actions: StateAction[] };
+
 export interface NotificationState {
   enabled: boolean;
   lastNotified: Map<string, number>;

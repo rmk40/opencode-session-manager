@@ -60,9 +60,7 @@ export class UDPDiscovery extends EventEmitter {
             this.handlePacket(packet);
           }
         } catch (error) {
-          if (this.config.debugFlags.udp) {
-            console.error("UDP packet parsing error:", error);
-          }
+          // UDP parsing errors are handled silently in TUI mode
         }
       });
 
@@ -104,9 +102,6 @@ export class UDPDiscovery extends EventEmitter {
 
       // Validate packet structure
       if (!this.isValidPacket(data)) {
-        if (this.config.debugFlags.udp) {
-          console.warn("Invalid UDP packet structure:", data);
-        }
         return null;
       }
 
@@ -117,9 +112,6 @@ export class UDPDiscovery extends EventEmitter {
 
       return data as UDPPacket;
     } catch (error) {
-      if (this.config.debugFlags.udp) {
-        console.error("Failed to parse UDP packet:", error);
-      }
       return null;
     }
   }
@@ -135,10 +127,6 @@ export class UDPDiscovery extends EventEmitter {
    * Handle parsed packet
    */
   private handlePacket(packet: UDPPacket): void {
-    if (this.config.debugFlags.udp) {
-      console.log("Received UDP packet:", packet);
-    }
-
     if (isAnnouncePacket(packet)) {
       this.emit("server_announced", packet);
     } else if (isShutdownPacket(packet)) {
@@ -182,9 +170,6 @@ export class UDPDiscovery extends EventEmitter {
 
       return response.ok;
     } catch (error) {
-      if (this.config.debugFlags.udp) {
-        console.warn(`Connection test failed for ${serverUrl}:`, error);
-      }
       return false;
     }
   }

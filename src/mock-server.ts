@@ -351,12 +351,6 @@ export class MockOpenCodeServer extends EventEmitter {
     // Normalize pathname
     const pathname = url.pathname.replace(/\/+/g, "/");
 
-    if (this.config.debug) {
-      console.log(
-        `Mock server ${this.serverId} received ${req.method} ${pathname}`,
-      );
-    }
-
     try {
       if (pathname === "/session/status" && req.method === "GET") {
         this.handleStatusRequest(res);
