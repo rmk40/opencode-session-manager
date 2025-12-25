@@ -969,6 +969,7 @@ function MainContent() {
 
 function AppInner() {
   const { exit } = useApp();
+  const { layout } = useLayout();
 
   // Handle process signals
   useEffect(() => {
@@ -984,10 +985,10 @@ function AppInner() {
   return (
     <Box
       flexDirection="column"
-      flexGrow={1}
+      width={layout.size.width}
+      height={layout.size.height}
       backgroundColor="#0d0d0d"
-      paddingX={1}
-      paddingY={1}
+      padding={1}
     >
       <Header />
       <MainContent />
@@ -1081,6 +1082,16 @@ export default async function main() {
     console.error("Error: stdin is not a TTY. Run in an interactive terminal.");
     process.exit(1);
   }
+
+  // Enter alternate screen buffer
+  process.stdout.write("\u001b[?1049h");
+
   const { waitUntilExit } = render(<App />);
-  await waitUntilExit();
+
+  try {
+    await waitUntilExit();
+  } finally {
+    // Exit alternate screen buffer
+    process.stdout.write("\u001b[?1049l");
+  }
 }
