@@ -1,6 +1,6 @@
 // Main application component and layout for OpenCode Session Monitor
 
-import { useEffect, useState, useMemo, createContext, useContext } from "react";
+import { useEffect, useState, useMemo } from "react";
 import { render, Box, Text, useInput, useApp } from "ink";
 import { Marked } from "marked";
 // @ts-ignore
@@ -11,25 +11,15 @@ import { groupSessions, sortGroups, sortSessions } from "./grouping";
 import { Session, SessionGroup } from "./types";
 
 // ---------------------------------------------------------------------------
-// Spinner Context for shared animation frame
-// ---------------------------------------------------------------------------
-
-const SpinnerContext = createContext(0);
-
-function useSpinner() {
-  return useContext(SpinnerContext);
-}
-
-// ---------------------------------------------------------------------------
 // Markdown Rendering
 // ---------------------------------------------------------------------------
 
-function createMarked(width: number) {
+function createMarkedRenderer(width: number) {
   return new Marked().use(
     markedTerminal({
       width: Math.max(20, width),
       reflowText: true,
-      showSectionPrefix: false, // Don't show literal ####
+      showSectionPrefix: false,
     }),
   );
 }
@@ -41,8 +31,17 @@ function createMarked(width: number) {
 function Header() {
   const { layout, truncateText } = useLayout();
   const { state } = useAppState();
-  const spinnerFrame = useSpinner();
+
+  // Localized spinner state to prevent root-level flickering
+  const [spinnerFrame, setSpinnerFrame] = useState(0);
   const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setSpinnerFrame((f) => (f + 1) % 10);
+    }, 100);
+    return () => clearInterval(timer);
+  }, []);
 
   const serverCount = state.servers.size;
   const sessions = Array.from(state.sessions.values());
@@ -340,7 +339,7 @@ function SessionView() {
 
   // Initialized marked once per width change
   const marked = useMemo(
-    () => createMarked(layout.size.width - 8),
+    () => createMarkedRenderer(layout.size.width - 12),
     [layout.size.width],
   );
 
@@ -386,7 +385,7 @@ function SessionView() {
 
       // If there are no parts, use raw content
       if (parts.length === 0 && msg.content) {
-        const rendered = marked.parse(String(msg.content)) as string;
+        const rendered = String(marked.parse(String(msg.content)));
         for (const line of rendered.trim().split("\n")) {
           lines.push({ type: "msg-body", content: line });
         }
@@ -415,7 +414,7 @@ function SessionView() {
             } catch (e) {}
           }
 
-          const rendered = marked.parse(displayContent) as string;
+          const rendered = String(marked.parse(displayContent));
           for (const line of rendered.trim().split("\n")) {
             lines.push({ type: "msg-body", content: line });
           }
@@ -459,7 +458,7 @@ function SessionView() {
             content: `┌─ Thinking...`,
           });
           const text = part.reasoning || part.text || "";
-          const rendered = marked.parse(text) as string;
+          const rendered = String(marked.parse(text));
           for (const line of rendered.trim().split("\n")) {
             lines.push({ type: "msg-reasoning-body", content: line });
           }
@@ -515,7 +514,7 @@ function SessionView() {
             content: `┌─ AGENT: ${name.toUpperCase()}`,
           });
           if (desc) {
-            const rendered = marked.parse(desc) as string;
+            const rendered = String(marked.parse(desc));
             for (const line of rendered.trim().split("\n")) {
               lines.push({ type: "msg-tool-body", content: line });
             }
@@ -553,7 +552,7 @@ function SessionView() {
     }
 
     return lines;
-  }, [session, layout.size.width, marked]);
+  }, [session, layout.size.width]);
 
   // Auto-scroll to bottom
   useEffect(() => {
@@ -887,15 +886,6 @@ function MainContent() {
 function AppInner() {
   const { exit } = useApp();
   const { layout } = useLayout();
-  const [spinnerFrame, setSpinnerFrame] = useState(0);
-
-  // Update spinner frame
-  useEffect(() => {
-    const timer = setInterval(() => {
-      setSpinnerFrame((f) => (f + 1) % 10);
-    }, 100);
-    return () => clearInterval(timer);
-  }, []);
 
   // Handle process signals
   useEffect(() => {
@@ -909,20 +899,18 @@ function AppInner() {
   }, [exit]);
 
   return (
-    <SpinnerContext.Provider value={spinnerFrame}>
-      <Box
-        flexDirection="column"
-        width={layout.size.width}
-        height={layout.size.height}
-        borderStyle="single"
-        borderColor="blue"
-        backgroundColor="#0d0d0d"
-      >
-        <Header />
-        <MainContent />
-        <Footer />
-      </Box>
-    </SpinnerContext.Provider>
+    <Box
+      flexDirection="column"
+      width={layout.size.width}
+      height={layout.size.height}
+      borderStyle="single"
+      borderColor="blue"
+      backgroundColor="#0d0d0d"
+    >
+      <Header />
+      <MainContent />
+      <Footer />
+    </Box>
   );
 }
 
