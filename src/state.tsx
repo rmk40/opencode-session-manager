@@ -1,6 +1,6 @@
 // State management with React Context for OpenCode Session Monitor
 
-import {
+import React, {
   createContext,
   useContext,
   useReducer,
@@ -21,13 +21,50 @@ import {
 import { connectionManager } from "./connection-manager";
 
 // ---------------------------------------------------------------------------
-// State Reducer
+// State Reducer (Optimized for Batching)
 // ---------------------------------------------------------------------------
 
 function stateReducer(state: AppState, action: StateAction): AppState {
   switch (action.type) {
-    case "BATCH":
-      return action.actions.reduce(stateReducer, state);
+    case "BATCH": {
+      // Optimization: Only clone Maps once per batch
+      let newServers: Map<string, Server> | null = null;
+      let newSessions: Map<string, Session> | null = null;
+      let newState = { ...state };
+
+      for (const a of action.actions) {
+        switch (a.type) {
+          case "ADD_SERVER":
+          case "UPDATE_SERVER":
+            if (!newServers) newServers = new Map(newState.servers);
+            newServers.set(a.server.id, a.server);
+            newState.servers = newServers;
+            break;
+          case "REMOVE_SERVER":
+            if (!newServers) newServers = new Map(newState.servers);
+            newServers.delete(a.serverId);
+            newState.servers = newServers;
+            break;
+          case "ADD_SESSION":
+          case "UPDATE_SESSION":
+            if (!newSessions) newSessions = new Map(newState.sessions);
+            newSessions.set(a.session.id, a.session);
+            newState.sessions = newSessions;
+            break;
+          case "REMOVE_SESSION":
+            if (!newSessions) newSessions = new Map(newState.sessions);
+            newSessions.delete(a.sessionId);
+            newState.sessions = newSessions;
+            if (newState.selectedSessionId === a.sessionId) {
+              newState.selectedSessionId = undefined;
+            }
+            break;
+          default:
+            newState = stateReducer(newState, a);
+        }
+      }
+      return newState;
+    }
 
     case "SET_SERVERS":
       return { ...state, servers: action.servers };
@@ -95,7 +132,13 @@ function stateReducer(state: AppState, action: StateAction): AppState {
     }
 
     case "SET_NOTIFICATIONS":
-      return { ...state, notifications: action.notifications };
+      return {
+        ...state,
+        notifications: {
+          ...state.notifications,
+          enabled: action.notifications.enabled,
+        },
+      };
 
     case "ADD_NOTIFICATION": {
       const newLastNotified = new Map(state.notifications.lastNotified);
