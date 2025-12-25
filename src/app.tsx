@@ -359,6 +359,17 @@ function SessionView() {
     lines.push({ type: "spacer" });
 
     for (const msg of session.messages) {
+      const parts = msg.parts || [];
+
+      // Skip empty assistant messages (healthchecks/heartbeats/ghost blocks)
+      if (
+        msg.role === "assistant" &&
+        parts.length === 0 &&
+        (!msg.content || msg.content.trim() === "")
+      ) {
+        continue;
+      }
+
       const role = msg.role === "user" ? "User" : "Assistant";
       const cost = msg.metadata?.cost
         ? ` $${msg.metadata.cost.toFixed(4)}`
@@ -370,18 +381,27 @@ function SessionView() {
         role: msg.role,
       });
 
-      const parts = msg.parts || [];
+      // Track if we need a spacer before the next part
+      let needsSpacer = false;
 
       // If there are no parts, use raw content
       if (parts.length === 0 && msg.content) {
-        const markdown = String(msg.content);
-        const rendered = marked.parse(markdown) as string;
+        const rendered = marked.parse(String(msg.content)) as string;
         for (const line of rendered.trim().split("\n")) {
           lines.push({ type: "msg-body", content: line });
         }
+        needsSpacer = true;
       }
 
-      for (const part of parts) {
+      for (let i = 0; i < parts.length; i++) {
+        const part = parts[i];
+
+        // Add a vertical spacer line between distinct parts
+        if (needsSpacer) {
+          lines.push({ type: "msg-body", content: "" });
+        }
+        needsSpacer = true;
+
         if (part.type === "text") {
           const text = part.text || part.content || "";
 
@@ -458,9 +478,51 @@ function SessionView() {
               content: `Reason: ${(part as any).reason}`,
             });
           }
+          const costVal = (part as any).cost || (part as any).tokens?.cost;
+          if (costVal) {
+            lines.push({
+              type: "msg-tool-body",
+              content: `Cost: $${Number(costVal).toFixed(4)}`,
+            });
+          }
+          lines.push({ type: "msg-tool-end", content: `└${"─".repeat(30)}` });
+        } else if (part.type === "patch") {
+          const hash = (part as any).hash || "unknown";
+          const files = (part as any).files || [];
+          lines.push({
+            type: "msg-tool-start",
+            content: `┌─ PATCH [${hash.slice(0, 8)}]`,
+          });
+          lines.push({
+            type: "msg-tool-body",
+            content: `${files.length} file(s) modified:`,
+          });
+          for (const file of files.slice(0, 5)) {
+            lines.push({ type: "msg-tool-body", content: `  • ${file}` });
+          }
+          if (files.length > 5) {
+            lines.push({
+              type: "msg-tool-body",
+              content: `  ... and ${files.length - 5} more`,
+            });
+          }
+          lines.push({ type: "msg-tool-end", content: `└${"─".repeat(30)}` });
+        } else if (part.type === "agent" || part.type === "subtask") {
+          const name = (part as any).name || (part as any).agent || "unknown";
+          const desc = (part as any).description || (part as any).prompt || "";
+          lines.push({
+            type: "msg-tool-start",
+            content: `┌─ AGENT: ${name.toUpperCase()}`,
+          });
+          if (desc) {
+            const rendered = marked.parse(desc) as string;
+            for (const line of rendered.trim().split("\n")) {
+              lines.push({ type: "msg-tool-body", content: line });
+            }
+          }
           lines.push({ type: "msg-tool-end", content: `└${"─".repeat(30)}` });
         } else {
-          // Handle other part types like 'agent', 'subtask', 'patch', etc.
+          // Handle other part types
           const typeLabel = part.type.toUpperCase();
           lines.push({ type: "msg-tool-start", content: `┌─ ${typeLabel}` });
 
@@ -676,7 +738,7 @@ function RenderedLine({ line }: { line: any }) {
     case "msg-body":
       return (
         <Box width={availableWidth} paddingLeft={1} backgroundColor="#161616">
-          <Text color="#e0e0e0">│ </Text>
+          <Text color="#e0e0e0">{line.content === "" ? "│" : "│ "}</Text>
           <Box flexGrow={1}>
             <Text>{line.content}</Text>
           </Box>

@@ -73,13 +73,46 @@ export class MockSessionGenerator {
     ];
     const now = Date.now();
 
+    // Randomly add complex parts for assistant messages
+    const parts: any[] = [];
+    if (role === "assistant") {
+      const rand = Math.random();
+      if (rand < 0.2) {
+        parts.push({
+          type: "text",
+          text: "I will apply the following changes:",
+        });
+        parts.push({
+          type: "patch",
+          hash: Math.random().toString(36).substring(2, 10),
+          files: ["src/app.tsx", "package.json"],
+        });
+      } else if (rand < 0.4) {
+        parts.push({ type: "step-start" });
+        parts.push({ type: "text", text: "Analyzing the codebase..." });
+        parts.push({
+          type: "step-finish",
+          reason: "analysis_complete",
+          cost: 0.0045,
+        });
+      } else if (rand < 0.6) {
+        parts.push({
+          type: "subtask",
+          description: "Refactor the authentication logic",
+          agent: "refactor-specialist",
+        });
+      }
+    }
+
     return {
       id: messageId,
       sessionId,
-      timestamp: now - Math.random() * 60000, // Random time in last minute, but ensure it's in the past
+      timestamp: now - Math.random() * 60000,
       role,
       type: types[Math.floor(Math.random() * types.length)],
-      content: `Mock message content ${this.messageCounter}`,
+      content:
+        parts.length > 0 ? "" : `Mock message content ${this.messageCounter}`,
+      parts,
       metadata: {
         cost: Math.random() * 0.1,
         tokens: Math.floor(Math.random() * 1000),
@@ -423,14 +456,18 @@ export class MockOpenCodeServer extends EventEmitter {
       info: {
         id: msg.id,
         sessionID: sessionId,
-        role: msg.type === "user_input" ? "user" : "assistant",
+        role: msg.role || (msg.type === "user_input" ? "user" : "assistant"),
         time: { created: msg.timestamp },
+        cost: msg.metadata?.cost,
       },
-      parts: [{ type: "text", text: msg.content }],
+      parts:
+        msg.parts && msg.parts.length > 0
+          ? msg.parts
+          : [{ type: "text", text: msg.content }],
     }));
 
     res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(JSON.stringify(messages));
+    res.end(JSON.stringify({ data: messages }));
   }
 
   /**
@@ -457,16 +494,22 @@ export class MockOpenCodeServer extends EventEmitter {
       parent_id: session.parentId,
       child_ids: session.childIds,
       messages: session.messages.map((msg) => ({
-        id: msg.id,
-        type: msg.type,
-        content: msg.content,
-        timestamp: new Date(msg.timestamp).toISOString(),
-        metadata: msg.metadata,
+        info: {
+          id: msg.id,
+          sessionID: sessionId,
+          role: msg.role || (msg.type === "user_input" ? "user" : "assistant"),
+          time: { created: msg.timestamp },
+          cost: msg.metadata?.cost,
+        },
+        parts:
+          msg.parts && msg.parts.length > 0
+            ? msg.parts
+            : [{ type: "text", text: msg.content }],
       })),
     };
 
     res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(JSON.stringify(response));
+    res.end(JSON.stringify({ data: response }));
   }
 
   /**
