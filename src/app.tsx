@@ -4,7 +4,7 @@ import { useEffect, useState, useMemo, createContext, useContext } from "react";
 import { render, Box, Text, useInput, useApp } from "ink";
 import { Marked } from "marked";
 // @ts-ignore
-import TerminalRenderer from "marked-terminal";
+import { markedTerminal } from "marked-terminal";
 import { AppStateProvider, useAppState } from "./state";
 import { LayoutProvider, useLayout } from "./layout";
 import { groupSessions, sortGroups, sortSessions } from "./grouping";
@@ -24,9 +24,7 @@ function useSpinner() {
 // Markdown Rendering
 // ---------------------------------------------------------------------------
 
-const marked = new Marked({
-  renderer: new TerminalRenderer(),
-});
+const marked = new Marked().use(markedTerminal());
 
 function Markdown({ children }: { children: string }) {
   const [content, setContent] = useState("");
@@ -34,6 +32,18 @@ function Markdown({ children }: { children: string }) {
   useEffect(() => {
     const parseMarkdown = async () => {
       try {
+        // Try to parse as JSON first for structured app responses
+        if (children.trim().startsWith("{") && children.trim().endsWith("}")) {
+          try {
+            const obj = JSON.parse(children);
+            const prettyJson = JSON.stringify(obj, null, 2);
+            setContent(prettyJson);
+            return;
+          } catch (e) {
+            // Not JSON, continue to markdown
+          }
+        }
+
         const parsed = await marked.parse(children);
         setContent(String(parsed).trim());
       } catch (err) {
@@ -390,7 +400,17 @@ function SessionView() {
       for (const part of parts) {
         if (part.type === "text") {
           const text = part.text || part.content || "";
-          for (const line of text.split("\n")) {
+
+          // Detect structured JSON in text parts
+          let displayContent = text;
+          if (text.trim().startsWith("{") && text.trim().endsWith("}")) {
+            try {
+              const obj = JSON.parse(text);
+              displayContent = JSON.stringify(obj, null, 2);
+            } catch (e) {}
+          }
+
+          for (const line of displayContent.split("\n")) {
             const wrapped = wrapText(line, termWidth - 10);
             for (const w of wrapped) {
               lines.push({ type: "msg-body", content: w });
@@ -443,6 +463,27 @@ function SessionView() {
           }
           lines.push({
             type: "msg-reasoning-end",
+            content: `└${"─".repeat(Math.min(30, termWidth - 14))}`,
+          });
+        } else {
+          // Handle other part types like 'agent', 'subtask', 'patch', etc.
+          const typeLabel = part.type.toUpperCase();
+          lines.push({ type: "msg-tool-start", content: `┌─ ${typeLabel}` });
+
+          const content =
+            part.content ||
+            part.text ||
+            (part as any).prompt ||
+            (part as any).description ||
+            JSON.stringify(part, null, 2);
+
+          for (const line of String(content).split("\n")) {
+            for (const w of wrapText(line, termWidth - 14)) {
+              lines.push({ type: "msg-tool-body", content: w });
+            }
+          }
+          lines.push({
+            type: "msg-tool-end",
             content: `└${"─".repeat(Math.min(30, termWidth - 14))}`,
           });
         }
