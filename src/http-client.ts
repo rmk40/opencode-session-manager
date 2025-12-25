@@ -1,402 +1,522 @@
-// HTTP client and OpenCode API integration
+// HTTP client and OpenCode API integration using OpenCode SDK
 
-import { Session, SessionStatus, Message, Result, AsyncResult, AppError } from './types'
-import { getConfig } from './config'
+import { Session, SessionStatus, Message, AsyncResult } from "./types";
+import { getConfig } from "./config";
 
 // ---------------------------------------------------------------------------
-// API Response Types
+// SDK Integration
+// ---------------------------------------------------------------------------
+
+let createOpencodeClient: any = null;
+let sdkInitialized = false;
+
+/**
+ * Initialize the OpenCode SDK
+ */
+export async function initSDK(): Promise<boolean> {
+  if (sdkInitialized) return true;
+
+  try {
+    const sdk = await import("@opencode-ai/sdk");
+    createOpencodeClient =
+      sdk.createOpencodeClient || (sdk as any).default?.createOpencodeClient;
+
+    if (!createOpencodeClient) {
+      throw new Error("createOpencodeClient not found in SDK module");
+    }
+
+    sdkInitialized = true;
+    return true;
+  } catch (error) {
+    console.error("Failed to load OpenCode SDK:", error);
+    return false;
+  }
+}
+
+/**
+ * Create an OpenCode SDK client
+ */
+function createSDKClient(baseUrl: string): any {
+  if (!createOpencodeClient) return null;
+  return createOpencodeClient({ baseUrl });
+}
+
+// ---------------------------------------------------------------------------
+// SDK Response Types (matching OpenCode SDK)
 // ---------------------------------------------------------------------------
 
 export interface OpenCodeStatusResponse {
-  sessions: OpenCodeSessionInfo[]
-  server: {
-    id: string
-    name: string
-    version?: string
-    uptime: number
-  }
+  [sessionId: string]: {
+    type: string;
+    status?: string;
+    name?: string;
+    title?: string;
+    created_at?: string;
+    last_activity?: string;
+    is_long_running?: boolean;
+    parent_id?: string;
+    parentID?: string;
+    child_ids?: string[];
+    project?: string;
+    branch?: string;
+    cost?: number;
+    tokens?: number;
+  };
 }
 
 export interface OpenCodeSessionInfo {
-  id: string
-  name: string
-  status: SessionStatus
-  created_at: string
-  last_activity: string
-  parent_id?: string
-  child_ids: string[]
-  project?: string
-  branch?: string
-  cost?: number
-  tokens?: number
-  is_long_running: boolean
+  id: string;
+  name?: string;
+  title?: string;
+  parent_id?: string;
+  parentID?: string;
+  child_ids?: string[];
+  directory?: string;
+  status?: string;
+  project?: string;
+  branch?: string;
+  cost?: number;
+  tokens?: number;
+  created_at?: string;
+  last_activity?: string;
+  is_long_running?: boolean;
 }
 
-export interface OpenCodeSessionDetails {
-  id: string
-  name: string
-  status: SessionStatus
-  created_at: string
-  last_activity: string
-  parent_id?: string
-  child_ids: string[]
-  project?: string
-  branch?: string
-  cost?: number
-  tokens?: number
-  is_long_running: boolean
-  messages: OpenCodeMessage[]
-  statistics: {
-    total_messages: number
-    total_cost: number
-    total_tokens: number
-    duration_ms: number
-  }
+export interface OpenCodeSessionDetails extends OpenCodeSessionInfo {
+  messages?: OpenCodeMessage[];
+  statistics?: {
+    total_messages?: number;
+    total_cost?: number;
+    total_tokens?: number;
+    duration_ms?: number;
+  };
 }
 
 export interface OpenCodeMessage {
-  id: string
-  timestamp: string
-  type: 'user_input' | 'assistant_response' | 'tool_execution' | 'permission_request' | 'system_message' | 'error_message'
-  content: string
-  metadata?: {
-    tool_name?: string
-    tool_args?: Record<string, unknown>
-    permission_type?: string
-    error_code?: string
-    cost?: number
-    tokens?: number
-  }
+  info: {
+    id: string;
+    sessionID: string;
+    role: "user" | "assistant" | "system";
+    time: {
+      created: number;
+    };
+    cost?: number;
+    tokens?: {
+      input: number;
+      output: number;
+    };
+  };
+  parts: Array<{
+    type: string;
+    text?: string;
+    reasoning?: string;
+    tool?: string;
+    toolName?: string;
+    toolArgs?: Record<string, unknown>;
+    permissionID?: string;
+    content?: string;
+    state?: {
+      status: string;
+      title?: string;
+      input?: Record<string, unknown>;
+      output?: string;
+    };
+  }>;
 }
 
 export interface SendMessageRequest {
-  content: string
-  type?: 'user_input' | 'system_message'
+  content: string;
+  type?: "user_input" | "system_message";
 }
 
 export interface SendMessageResponse {
-  message_id: string
-  status: 'sent' | 'queued' | 'error'
-  error?: string
+  message_id: string;
+  status: "sent" | "queued" | "error";
+  error?: string;
 }
 
 export interface AbortSessionResponse {
-  status: 'aborted' | 'error'
-  error?: string
+  status: "aborted" | "error";
+  error?: string;
 }
 
 // ---------------------------------------------------------------------------
-// HTTP Client Pool
+// SDK Client Pool
 // ---------------------------------------------------------------------------
 
 export class HTTPClientPool {
-  private clients = new Map<string, HTTPClient>()
-  private config = getConfig()
+  private clients = new Map<string, HTTPClient>();
+
+  /**
+   * Initialize SDK if not already done
+   */
+  async initialize(): Promise<boolean> {
+    return await initSDK();
+  }
 
   /**
    * Get or create HTTP client for a server
    */
-  getClient(serverUrl: string): HTTPClient {
-    let client = this.clients.get(serverUrl)
-    if (!client) {
-      client = new HTTPClient(serverUrl)
-      this.clients.set(serverUrl, client)
+  async getClient(serverUrl: string): Promise<HTTPClient | null> {
+    // Ensure SDK is initialized
+    if (!(await this.initialize())) {
+      return null;
     }
-    return client
+
+    let client = this.clients.get(serverUrl);
+    if (!client) {
+      client = new HTTPClient(serverUrl);
+      this.clients.set(serverUrl, client);
+    }
+    return client;
   }
 
   /**
    * Remove client for a server
    */
   removeClient(serverUrl: string): void {
-    this.clients.delete(serverUrl)
+    this.clients.delete(serverUrl);
   }
 
   /**
    * Clear all clients
    */
   clearAll(): void {
-    this.clients.clear()
+    this.clients.clear();
   }
 
   /**
    * Get all active client URLs
    */
   getActiveUrls(): string[] {
-    return Array.from(this.clients.keys())
+    return Array.from(this.clients.keys());
   }
 }
 
 // ---------------------------------------------------------------------------
-// HTTP Client
+// SDK Client
 // ---------------------------------------------------------------------------
 
 export class HTTPClient {
-  private baseUrl: string
-  private config = getConfig()
+  private baseUrl: string;
+  private config = getConfig();
+  private sdkClient: any = null;
 
   constructor(serverUrl: string) {
     // Normalize URL by removing trailing slashes and handling multiple slashes
-    let normalized = serverUrl.replace(/\/+$/, '') // Remove trailing slashes
-    normalized = normalized.replace(/([^:]\/)\/+/g, '$1') // Replace multiple slashes with single slash (except after protocol)
-    this.baseUrl = normalized
+    let normalized = serverUrl.replace(/\/+$/, ""); // Remove trailing slashes
+    normalized = normalized.replace(/([^:]\/)\/+/g, "$1"); // Replace multiple slashes with single slash (except after protocol)
+    this.baseUrl = normalized;
+
+    // Create SDK client
+    this.sdkClient = createSDKClient(this.baseUrl);
   }
 
   /**
-   * Get server status and session list
+   * Get all sessions from server and merge with their status
+   */
+  async getSessions(
+    serverId: string,
+    project?: string,
+    branch?: string,
+  ): AsyncResult<Session[]> {
+    if (!this.sdkClient) {
+      return {
+        success: false,
+        error: {
+          code: "SDK_NOT_AVAILABLE",
+          message: "OpenCode SDK not available",
+          timestamp: Date.now(),
+          recoverable: false,
+        },
+      };
+    }
+
+    try {
+      if (this.config.debug) {
+        console.log(`SDK session.list() and session.status() ${this.baseUrl}`);
+      }
+
+      // Fetch both list and status in parallel
+      const [listResponse, statusResponse] = await Promise.all([
+        this.sdkClient.session.list(),
+        this.sdkClient.session.status(),
+      ]);
+
+      const sessions: any[] = listResponse.data || [];
+      const statusMap: Record<string, any> = statusResponse.data || {};
+
+      const convertedSessions = sessions.map((s) => {
+        const statusData = statusMap[s.id] || { type: "idle" };
+        return convertSessionInfo(
+          s.id,
+          { ...s, ...statusData },
+          serverId,
+          this.baseUrl,
+          project,
+          branch,
+        );
+      });
+
+      return {
+        success: true,
+        data: convertedSessions,
+      };
+    } catch (error) {
+      return {
+        success: false,
+        error: {
+          code: "NETWORK_ERROR",
+          message: error instanceof Error ? error.message : "Unknown SDK error",
+          timestamp: Date.now(),
+          recoverable: true,
+        },
+      };
+    }
+  }
+
+  /**
+   * Get server status and session list using SDK
+   * @deprecated Use getSessions
    */
   async getStatus(): AsyncResult<OpenCodeStatusResponse> {
-    try {
-      const response = await this.fetch('/api/status')
-      if (!response.ok) {
-        return {
-          success: false,
-          error: {
-            code: 'SERVER_UNREACHABLE',
-            message: `Server returned ${response.status}: ${response.statusText}`,
-            timestamp: Date.now(),
-            recoverable: true
-          }
-        }
-      }
-
-      const data = await response.json()
-      return {
-        success: true,
-        data: data as OpenCodeStatusResponse
-      }
-    } catch (error) {
+    if (!this.sdkClient) {
       return {
         success: false,
         error: {
-          code: 'NETWORK_ERROR',
-          message: error instanceof Error ? error.message : 'Unknown network error',
+          code: "SDK_NOT_AVAILABLE",
+          message: "OpenCode SDK not available",
           timestamp: Date.now(),
-          recoverable: true
-        }
-      }
-    }
-  }
-
-  /**
-   * Get detailed session information
-   */
-  async getSessionDetails(sessionId: string): AsyncResult<OpenCodeSessionDetails> {
-    try {
-      const response = await this.fetch(`/api/sessions/${sessionId}`)
-      if (!response.ok) {
-        if (response.status === 404) {
-          return {
-            success: false,
-            error: {
-              code: 'SESSION_NOT_FOUND',
-              message: `Session ${sessionId} not found`,
-              timestamp: Date.now(),
-              recoverable: false
-            }
-          }
-        }
-
-        return {
-          success: false,
-          error: {
-            code: 'SERVER_UNREACHABLE',
-            message: `Server returned ${response.status}: ${response.statusText}`,
-            timestamp: Date.now(),
-            recoverable: true
-          }
-        }
-      }
-
-      const data = await response.json()
-      return {
-        success: true,
-        data: data as OpenCodeSessionDetails
-      }
-    } catch (error) {
-      return {
-        success: false,
-        error: {
-          code: 'NETWORK_ERROR',
-          message: error instanceof Error ? error.message : 'Unknown network error',
-          timestamp: Date.now(),
-          recoverable: true
-        }
-      }
-    }
-  }
-
-  /**
-   * Send message to session
-   */
-  async sendMessage(sessionId: string, request: SendMessageRequest): AsyncResult<SendMessageResponse> {
-    try {
-      const response = await this.fetch(`/api/sessions/${sessionId}/messages`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
+          recoverable: false,
         },
-        body: JSON.stringify(request)
-      })
+      };
+    }
 
-      if (!response.ok) {
-        if (response.status === 404) {
-          return {
-            success: false,
-            error: {
-              code: 'SESSION_NOT_FOUND',
-              message: `Session ${sessionId} not found`,
-              timestamp: Date.now(),
-              recoverable: false
-            }
-          }
-        }
-
-        if (response.status === 403) {
-          return {
-            success: false,
-            error: {
-              code: 'PERMISSION_DENIED',
-              message: 'Permission denied to send message',
-              timestamp: Date.now(),
-              recoverable: false
-            }
-          }
-        }
-
-        return {
-          success: false,
-          error: {
-            code: 'SERVER_UNREACHABLE',
-            message: `Server returned ${response.status}: ${response.statusText}`,
-            timestamp: Date.now(),
-            recoverable: true
-          }
-        }
+    try {
+      if (this.config.debug) {
+        console.log(`SDK session.status() ${this.baseUrl}`);
       }
 
-      const data = await response.json()
+      const response = await this.sdkClient.session.status();
+
+      if (this.config.debug) {
+        console.log(`SDK response:`, response);
+      }
+
       return {
         success: true,
-        data: data as SendMessageResponse
-      }
+        data: response.data || {},
+      };
     } catch (error) {
       return {
         success: false,
         error: {
-          code: 'NETWORK_ERROR',
-          message: error instanceof Error ? error.message : 'Unknown network error',
+          code: "NETWORK_ERROR",
+          message: error instanceof Error ? error.message : "Unknown SDK error",
           timestamp: Date.now(),
-          recoverable: true
-        }
-      }
+          recoverable: true,
+        },
+      };
     }
   }
 
   /**
-   * Abort session
+   * Get detailed session information using SDK
+   */
+  async getSessionDetails(
+    sessionId: string,
+  ): AsyncResult<OpenCodeSessionDetails> {
+    if (!this.sdkClient) {
+      return {
+        success: false,
+        error: {
+          code: "SDK_NOT_AVAILABLE",
+          message: "OpenCode SDK not available",
+          timestamp: Date.now(),
+          recoverable: false,
+        },
+      };
+    }
+
+    try {
+      if (this.config.debug) {
+        console.log(`SDK session.get() and session.messages() ${sessionId}`);
+      }
+
+      // Fetch both session info and messages
+      const [sessionResponse, messagesResponse] = await Promise.all([
+        this.sdkClient.session.get({ path: { id: sessionId } }),
+        this.sdkClient.session.messages({ path: { id: sessionId } }),
+      ]);
+
+      if (this.config.debug) {
+        console.log(
+          `SDK session.get response:`,
+          JSON.stringify(sessionResponse.data).slice(0, 100),
+        );
+        console.log(
+          `SDK session.messages count:`,
+          messagesResponse.data?.length,
+        );
+      }
+
+      if (!sessionResponse.data) {
+        return {
+          success: false,
+          error: {
+            code: "SESSION_NOT_FOUND",
+            message: `Session ${sessionId} not found`,
+            timestamp: Date.now(),
+            recoverable: false,
+          },
+        };
+      }
+
+      const sessionData = sessionResponse.data;
+      const messagesData = messagesResponse.data || [];
+
+      return {
+        success: true,
+        data: {
+          ...sessionData,
+          messages: messagesData,
+        } as unknown as OpenCodeSessionDetails,
+      };
+    } catch (error) {
+      return {
+        success: false,
+        error: {
+          code: "NETWORK_ERROR",
+          message: error instanceof Error ? error.message : "Unknown SDK error",
+          timestamp: Date.now(),
+          recoverable: true,
+        },
+      };
+    }
+  }
+
+  /**
+   * Send message to session (not implemented in current SDK)
+   */
+  async sendMessage(
+    _sessionId: string,
+    _request: SendMessageRequest,
+  ): AsyncResult<SendMessageResponse> {
+    return {
+      success: false,
+      error: {
+        code: "NOT_IMPLEMENTED",
+        message: "Send message not implemented in current SDK",
+        timestamp: Date.now(),
+        recoverable: false,
+      },
+    };
+  }
+
+  /**
+   * Abort session using SDK
    */
   async abortSession(sessionId: string): AsyncResult<AbortSessionResponse> {
+    if (!this.sdkClient) {
+      return {
+        success: false,
+        error: {
+          code: "SDK_NOT_AVAILABLE",
+          message: "OpenCode SDK not available",
+          timestamp: Date.now(),
+          recoverable: false,
+        },
+      };
+    }
+
     try {
-      const response = await this.fetch(`/api/sessions/${sessionId}/abort`, {
-        method: 'POST'
-      })
-
-      if (!response.ok) {
-        if (response.status === 404) {
-          return {
-            success: false,
-            error: {
-              code: 'SESSION_NOT_FOUND',
-              message: `Session ${sessionId} not found`,
-              timestamp: Date.now(),
-              recoverable: false
-            }
-          }
-        }
-
-        return {
-          success: false,
-          error: {
-            code: 'SERVER_UNREACHABLE',
-            message: `Server returned ${response.status}: ${response.statusText}`,
-            timestamp: Date.now(),
-            recoverable: true
-          }
-        }
+      if (this.config.debug) {
+        console.log(`SDK session.abort() ${sessionId}`);
       }
 
-      const data = await response.json()
+      await this.sdkClient.session.abort({
+        path: { id: sessionId },
+      });
+
       return {
         success: true,
-        data: data as AbortSessionResponse
-      }
+        data: { status: "aborted" },
+      };
     } catch (error) {
       return {
         success: false,
         error: {
-          code: 'NETWORK_ERROR',
-          message: error instanceof Error ? error.message : 'Unknown network error',
+          code: "NETWORK_ERROR",
+          message: error instanceof Error ? error.message : "Unknown SDK error",
           timestamp: Date.now(),
-          recoverable: true
-        }
-      }
+          recoverable: true,
+        },
+      };
     }
   }
 
   /**
-   * Test server health
+   * Test server health using SDK
    */
   async testHealth(): AsyncResult<boolean> {
+    if (!this.sdkClient) {
+      return {
+        success: false,
+        error: {
+          code: "SDK_NOT_AVAILABLE",
+          message: "OpenCode SDK not available",
+          timestamp: Date.now(),
+          recoverable: false,
+        },
+      };
+    }
+
     try {
-      const response = await this.fetch('/health', {
-        signal: AbortSignal.timeout(5000)
-      })
-      
+      // Try to get status as a health check
+      const result = await this.getStatus();
       return {
         success: true,
-        data: response.ok
-      }
+        data: result.success,
+      };
     } catch (error) {
       return {
         success: false,
         error: {
-          code: 'NETWORK_ERROR',
-          message: error instanceof Error ? error.message : 'Health check failed',
+          code: "NETWORK_ERROR",
+          message:
+            error instanceof Error ? error.message : "Health check failed",
           timestamp: Date.now(),
-          recoverable: true
-        }
-      }
+          recoverable: true,
+        },
+      };
     }
   }
 
   /**
-   * Internal fetch wrapper with debugging
+   * Subscribe to server events using SDK
    */
-  private async fetch(path: string, options?: RequestInit): Promise<Response> {
-    const url = `${this.baseUrl}${path}`
-    
-    if (this.config.debug) {
-      console.log(`HTTP ${options?.method || 'GET'} ${url}`)
+  async subscribe(onEvent: (event: any) => void): Promise<void> {
+    if (!this.sdkClient) return;
+
+    try {
+      const response = await this.sdkClient.event.subscribe();
+      if (response.stream) {
+        for await (const event of response.stream) {
+          onEvent(event);
+        }
+      }
+    } catch (error) {
+      if (this.config.debug) {
+        console.error(`SSE stream error for ${this.baseUrl}:`, error);
+      }
     }
-
-    const response = await fetch(url, {
-      ...options,
-      signal: options?.signal || AbortSignal.timeout(10000), // 10 second default timeout
-    })
-
-    if (this.config.debug) {
-      console.log(`HTTP ${response.status} ${response.statusText}`)
-    }
-
-    return response
   }
 
   /**
    * Get base URL
    */
   get url(): string {
-    return this.baseUrl
+    return this.baseUrl;
   }
 }
 
@@ -405,56 +525,25 @@ export class HTTPClient {
 // ---------------------------------------------------------------------------
 
 /**
- * Convert OpenCode session info to internal Session type
+ * Map SDK status strings to our SessionStatus enum
  */
-export function convertSessionInfo(
-  sessionInfo: OpenCodeSessionInfo,
-  serverId: string,
-  serverUrl: string
-): Session {
-  return {
-    id: sessionInfo.id,
-    serverId,
-    serverUrl,
-    name: sessionInfo.name,
-    status: sessionInfo.status,
-    createdAt: new Date(sessionInfo.created_at).getTime(),
-    lastActivity: new Date(sessionInfo.last_activity).getTime(),
-    isLongRunning: sessionInfo.is_long_running,
-    parentId: sessionInfo.parent_id,
-    childIds: sessionInfo.child_ids,
-    project: sessionInfo.project,
-    branch: sessionInfo.branch,
-    cost: sessionInfo.cost,
-    tokens: sessionInfo.tokens,
-    messages: [] // Messages loaded separately
-  }
-}
-
-/**
- * Convert OpenCode session details to internal Session type
- */
-export function convertSessionDetails(
-  sessionDetails: OpenCodeSessionDetails,
-  serverId: string,
-  serverUrl: string
-): Session {
-  return {
-    id: sessionDetails.id,
-    serverId,
-    serverUrl,
-    name: sessionDetails.name,
-    status: sessionDetails.status,
-    createdAt: new Date(sessionDetails.created_at).getTime(),
-    lastActivity: new Date(sessionDetails.last_activity).getTime(),
-    isLongRunning: sessionDetails.is_long_running,
-    parentId: sessionDetails.parent_id,
-    childIds: sessionDetails.child_ids,
-    project: sessionDetails.project,
-    branch: sessionDetails.branch,
-    cost: sessionDetails.cost,
-    tokens: sessionDetails.tokens,
-    messages: sessionDetails.messages.map(convertMessage)
+function mapSDKStatusToSessionStatus(sdkStatus: string): SessionStatus {
+  switch (sdkStatus.toLowerCase()) {
+    case "idle":
+      return "idle";
+    case "busy":
+    case "running":
+      return "busy";
+    case "pending":
+      return "waiting_for_permission";
+    case "completed":
+      return "completed";
+    case "error":
+      return "error";
+    case "aborted":
+      return "aborted";
+    default:
+      return "idle";
   }
 }
 
@@ -462,18 +551,137 @@ export function convertSessionDetails(
  * Convert OpenCode message to internal Message type
  */
 export function convertMessage(message: OpenCodeMessage): Message {
+  const { info, parts } = message;
+
+  // Concatenate all text and reasoning parts for backward compatibility / simple views
+  const textParts = parts
+    .filter((p) => ["text", "reasoning"].includes(p.type))
+    .map((p) => p.text || p.content || "")
+    .filter(Boolean);
+
+  const textContent = textParts.join("\n");
+
+  // Find first tool execution or permission request
+  const toolPart = parts.find((p) =>
+    ["tool", "permission", "call"].includes(p.type),
+  );
+
   return {
-    id: message.id,
-    sessionId: '', // Will be set by caller
-    timestamp: new Date(message.timestamp).getTime(),
-    type: message.type,
-    content: message.content,
-    metadata: message.metadata
-  }
+    id: info.id,
+    sessionId: info.sessionID,
+    timestamp: info.time.created,
+    role: info.role,
+    type:
+      info.role === "user"
+        ? "user_input"
+        : toolPart
+          ? toolPart.type === "permission"
+            ? "permission_request"
+            : "tool_execution"
+          : "assistant_response",
+    content: textContent || toolPart?.text || toolPart?.content || "",
+    parts: parts.map((p) => ({
+      ...p,
+      tool: p.tool || p.toolName,
+      toolName: p.toolName || p.tool,
+    })),
+    metadata: {
+      toolName: toolPart?.toolName || (toolPart as any)?.name,
+      toolArgs: toolPart?.toolArgs || (toolPart as any)?.args,
+      cost: info.cost,
+      tokens: info.tokens?.output,
+    },
+  };
+}
+
+/**
+ * Convert OpenCode SDK session info to internal Session type
+ */
+export function convertSessionInfo(
+  sessionId: string,
+  statusData: any,
+  serverId: string,
+  serverUrl: string,
+  project?: string,
+  branch?: string,
+): Session {
+  const status =
+    typeof statusData === "string"
+      ? statusData
+      : statusData?.type || statusData?.status || "idle";
+
+  return {
+    id: sessionId,
+    serverId,
+    serverUrl,
+    name:
+      statusData?.name ||
+      statusData?.title ||
+      `Session ${sessionId.slice(0, 8)}`,
+    status: mapSDKStatusToSessionStatus(status),
+    createdAt: statusData?.created_at
+      ? new Date(statusData.created_at).getTime()
+      : statusData?.time?.created || Date.now(),
+    lastActivity: statusData?.last_activity
+      ? new Date(statusData.last_activity).getTime()
+      : statusData?.time?.updated || Date.now(),
+    isLongRunning:
+      statusData?.is_long_running || statusData?.isLongRunning || false,
+    parentId: statusData?.parent_id || statusData?.parentID || undefined,
+    childIds: statusData?.child_ids || [],
+    project:
+      statusData?.project || statusData?.projectID || project || undefined,
+    branch: statusData?.branch || branch || undefined,
+    cost: statusData?.cost || undefined,
+    tokens: statusData?.tokens || undefined,
+    messages: [], // Messages loaded separately
+  };
+}
+
+/**
+ * @deprecated Use convertSessionInfo
+ */
+export const convertSessionFromStatus = convertSessionInfo;
+
+/**
+ * Convert OpenCode SDK session details to internal Session type
+ */
+export function convertSessionDetails(
+  sessionDetails: any,
+  serverId: string,
+  serverUrl: string,
+): Session {
+  return {
+    id: sessionDetails.id,
+    serverId,
+    serverUrl,
+    name:
+      sessionDetails.name ||
+      sessionDetails.title ||
+      `Session ${sessionDetails.id.slice(0, 8)}`,
+    status: mapSDKStatusToSessionStatus(sessionDetails.status || "idle"),
+    createdAt: sessionDetails.created_at
+      ? new Date(sessionDetails.created_at).getTime()
+      : sessionDetails.time?.created || Date.now(),
+    lastActivity: sessionDetails.last_activity
+      ? new Date(sessionDetails.last_activity).getTime()
+      : sessionDetails.time?.updated || Date.now(),
+    isLongRunning:
+      sessionDetails.is_long_running || sessionDetails.isLongRunning || false,
+    parentId: sessionDetails.parent_id || sessionDetails.parentID || undefined,
+    childIds: sessionDetails.child_ids || [],
+    project: sessionDetails.project || sessionDetails.projectID || undefined,
+    branch: sessionDetails.branch || undefined,
+    cost: sessionDetails.cost || undefined,
+    tokens: sessionDetails.tokens || undefined,
+    messages: (sessionDetails.messages || []).map((m: any) =>
+      convertMessage(m),
+    ),
+  };
 }
 
 // ---------------------------------------------------------------------------
 // Global Client Pool Instance
 // ---------------------------------------------------------------------------
 
-export const httpClientPool = new HTTPClientPool()
+export const httpClientPool = new HTTPClientPool();

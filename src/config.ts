@@ -7,13 +7,13 @@ import { join } from 'node:path'
 // Environment Variables
 // ---------------------------------------------------------------------------
 
-export const PORT = parseInt(process.env.OC_SESSION_PORT || '', 10) || 19876
-export const STALE_TIMEOUT_SEC = parseInt(process.env.OC_SESSION_TIMEOUT || '', 10) || 120
+export const PORT = parseInt(process.env.OPENCODE_MONITOR_PORT || '', 10) || 41234
+export const STALE_TIMEOUT_SEC = parseInt(process.env.OPENCODE_MONITOR_TIMEOUT || '', 10) || 120
 export const STALE_TIMEOUT_MS = STALE_TIMEOUT_SEC * 1000
-export const LONG_RUNNING_MIN = parseInt(process.env.OC_SESSION_LONG_RUNNING || '', 10) || 10
+export const LONG_RUNNING_MIN = parseInt(process.env.OPENCODE_MONITOR_LONG_RUNNING || '', 10) || 10
 export const LONG_RUNNING_MS = LONG_RUNNING_MIN * 60 * 1000
-export const NOTIFY_ENABLED = process.env.OC_SESSION_NOTIFY !== '0'
-export const DEBUG = process.env.OC_SESSION_DEBUG === '1'
+export const NOTIFY_ENABLED = process.env.OPENCODE_MONITOR_NOTIFICATIONS !== '0'
+export const DEBUG = process.env.OPENCODE_MONITOR_DEBUG === '1'
 
 // ---------------------------------------------------------------------------
 // Paths

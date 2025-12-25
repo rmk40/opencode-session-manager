@@ -16,6 +16,7 @@ import { createSocket } from "node:dgram";
 import { execSync } from "node:child_process";
 import { basename } from "node:path";
 import { hostname } from "node:os";
+import { appendFileSync } from "node:fs";
 
 // ---------------------------------------------------------------------------
 // Configuration
@@ -78,11 +79,24 @@ function discoverListeningPort() {
 // Plugin export
 // ---------------------------------------------------------------------------
 
-export const OpencodeSessionMonitor = async ({ project, directory, client }) => {
+export const OpencodeSessionMonitor = async ({
+  project,
+  directory,
+  client,
+}) => {
   const serverId = `${hostname()}-${process.pid}`;
   const dirName = basename(directory);
   const branch = getGitBranch(directory);
   const serverName = project?.name || dirName;
+
+  // Log plugin startup
+  const logFile = "/tmp/opencode-plugin.log";
+  const logMessage = `[${new Date().toISOString()}] Plugin started for ${serverName} (PID: ${process.pid})\n`;
+  try {
+    appendFileSync(logFile, logMessage);
+  } catch (e) {
+    // Ignore file write errors
+  }
 
   console.error(
     `[opencode-session-monitor] Starting for ${serverName} (PID: ${process.pid})`,
@@ -101,7 +115,9 @@ export const OpencodeSessionMonitor = async ({ project, directory, client }) => 
     const port = discoverListeningPort();
     if (port) {
       serverUrl = `http://127.0.0.1:${port}`;
-      console.error(`[opencode-session-monitor] Discovered server URL: ${serverUrl}`);
+      console.error(
+        `[opencode-session-monitor] Discovered server URL: ${serverUrl}`,
+      );
       return serverUrl;
     }
 
@@ -133,6 +149,8 @@ export const OpencodeSessionMonitor = async ({ project, directory, client }) => 
       serverId,
       serverUrl: url,
       serverName,
+      project: project?.name || dirName,
+      branch: branch,
       version: "1.0.0",
       timestamp: Date.now(),
     };
@@ -144,14 +162,22 @@ export const OpencodeSessionMonitor = async ({ project, directory, client }) => 
       });
     }
     debug("Sent announce:", payload);
+
+    // Also log to file
+    try {
+      const logMessage = `[${new Date().toISOString()}] Sent announce: ${JSON.stringify(payload)}\n`;
+      appendFileSync("/tmp/opencode-plugin.log", logMessage);
+    } catch (e) {
+      // Ignore file write errors
+    }
   }
 
   // Send shutdown notification
   function sendShutdown() {
-    const payload = { 
-      type: "shutdown", 
-      serverId, 
-      timestamp: Date.now() 
+    const payload = {
+      type: "shutdown",
+      serverId,
+      timestamp: Date.now(),
     };
     const buffer = Buffer.from(JSON.stringify(payload));
     for (const host of HOSTS) {
@@ -173,7 +199,11 @@ export const OpencodeSessionMonitor = async ({ project, directory, client }) => 
     shuttingDown = true;
     clearInterval(heartbeatTimer);
     sendShutdown();
-    setTimeout(() => socket.close(), 100);
+    setTimeout(() => {
+      try {
+        socket.close();
+      } catch (e) {}
+    }, 100);
   };
 
   process.on("SIGINT", handleShutdown);

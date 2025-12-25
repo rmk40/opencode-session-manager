@@ -1,46 +1,50 @@
 // Desktop notification system for OpenCode Session Monitor
 
-import { exec } from 'node:child_process'
-import { promisify } from 'node:util'
-import { Session, PermissionRequestEvent, AppError } from './types'
-import { getConfig } from './config'
+import { exec } from "node:child_process";
+import { promisify } from "node:util";
+import { Session, PermissionRequestEvent, AppError } from "./types";
+import { getConfig } from "./config";
 
-const execAsync = promisify(exec)
+const execAsync = promisify(exec);
 
 // ---------------------------------------------------------------------------
 // Notification Types
 // ---------------------------------------------------------------------------
 
 export interface NotificationOptions {
-  title: string
-  message: string
-  sound?: boolean
-  urgent?: boolean
-  icon?: string
-  actions?: NotificationAction[]
+  title: string;
+  message: string;
+  sound?: boolean;
+  urgent?: boolean;
+  icon?: string;
+  actions?: NotificationAction[];
 }
 
 export interface NotificationAction {
-  id: string
-  label: string
+  id: string;
+  label: string;
 }
 
 export interface NotificationResult {
-  success: boolean
-  actionId?: string
-  error?: string
+  success: boolean;
+  actionId?: string;
+  error?: string;
 }
 
 // ---------------------------------------------------------------------------
 // Platform Detection
 // ---------------------------------------------------------------------------
 
-export function getPlatform(): 'macos' | 'linux' | 'windows' | 'unknown' {
+export function getPlatform(): "macos" | "linux" | "windows" | "unknown" {
   switch (process.platform) {
-    case 'darwin': return 'macos'
-    case 'linux': return 'linux'
-    case 'win32': return 'windows'
-    default: return 'unknown'
+    case "darwin":
+      return "macos";
+    case "linux":
+      return "linux";
+    case "win32":
+      return "windows";
+    default:
+      return "unknown";
   }
 }
 
@@ -49,116 +53,132 @@ export function getPlatform(): 'macos' | 'linux' | 'windows' | 'unknown' {
 // ---------------------------------------------------------------------------
 
 export class NotificationManager {
-  private config = getConfig()
-  private platform = getPlatform()
-  private lastNotifications = new Map<string, number>()
-  private readonly NOTIFICATION_COOLDOWN = 30000 // 30 seconds
+  private config = getConfig();
+  private platform = getPlatform();
+  private lastNotifications = new Map<string, number>();
+  private readonly NOTIFICATION_COOLDOWN = 30000; // 30 seconds
 
   constructor() {}
 
   /**
    * Send a desktop notification
    */
-  async sendNotification(options: NotificationOptions): Promise<NotificationResult> {
+  async sendNotification(
+    options: NotificationOptions,
+  ): Promise<NotificationResult> {
     if (!this.config.notifyEnabled) {
-      return { success: false, error: 'Notifications disabled' }
+      return { success: false, error: "Notifications disabled" };
     }
 
     // Check cooldown
-    const key = `${options.title}:${options.message}`
-    const lastSent = this.lastNotifications.get(key) || 0
-    const now = Date.now()
-    
+    const key = `${options.title}:${options.message}`;
+    const lastSent = this.lastNotifications.get(key) || 0;
+    const now = Date.now();
+
     if (now - lastSent < this.NOTIFICATION_COOLDOWN) {
-      return { success: false, error: 'Notification cooldown active' }
+      return { success: false, error: "Notification cooldown active" };
     }
 
     try {
-      const result = await this.sendPlatformNotification(options)
-      
+      const result = await this.sendPlatformNotification(options);
+
       if (result.success) {
-        this.lastNotifications.set(key, now)
+        this.lastNotifications.set(key, now);
       }
-      
-      return result
+
+      return result;
     } catch (error) {
       return {
         success: false,
-        error: error instanceof Error ? error.message : 'Unknown error'
-      }
+        error: error instanceof Error ? error.message : "Unknown error",
+      };
     }
   }
 
   /**
    * Send platform-specific notification
    */
-  private async sendPlatformNotification(options: NotificationOptions): Promise<NotificationResult> {
+  private async sendPlatformNotification(
+    options: NotificationOptions,
+  ): Promise<NotificationResult> {
     switch (this.platform) {
-      case 'macos':
-        return this.sendMacOSNotification(options)
-      case 'linux':
-        return this.sendLinuxNotification(options)
-      case 'windows':
-        return this.sendWindowsNotification(options)
+      case "macos":
+        return this.sendMacOSNotification(options);
+      case "linux":
+        return this.sendLinuxNotification(options);
+      case "windows":
+        return this.sendWindowsNotification(options);
       default:
-        return { success: false, error: 'Unsupported platform' }
+        return { success: false, error: "Unsupported platform" };
     }
   }
 
   /**
    * Send macOS notification using osascript
    */
-  private async sendMacOSNotification(options: NotificationOptions): Promise<NotificationResult> {
-    const { title, message, sound = false } = options
-    
+  private async sendMacOSNotification(
+    options: NotificationOptions,
+  ): Promise<NotificationResult> {
+    const { title, message, sound = false } = options;
+
     const script = `
       display notification "${this.escapeAppleScript(message)}" \\
         with title "${this.escapeAppleScript(title)}" \\
-        ${sound ? 'sound name "default"' : ''}
-    `
+        ${sound ? 'sound name "default"' : ""}
+    `;
 
     try {
-      await execAsync(`osascript -e '${script}'`)
-      return { success: true }
+      await execAsync(`osascript -e '${script}'`);
+      return { success: true };
     } catch (error) {
       return {
         success: false,
-        error: error instanceof Error ? error.message : 'Failed to send macOS notification'
-      }
+        error:
+          error instanceof Error
+            ? error.message
+            : "Failed to send macOS notification",
+      };
     }
   }
 
   /**
    * Send Linux notification using notify-send
    */
-  private async sendLinuxNotification(options: NotificationOptions): Promise<NotificationResult> {
-    const { title, message, urgent = false, icon } = options
-    
+  private async sendLinuxNotification(
+    options: NotificationOptions,
+  ): Promise<NotificationResult> {
+    const { title, message, urgent = false, icon } = options;
+
     const args = [
-      'notify-send',
-      urgent ? '--urgency=critical' : '--urgency=normal',
-      icon ? `--icon=${icon}` : '',
+      "notify-send",
+      urgent ? "--urgency=critical" : "--urgency=normal",
+      icon ? `--icon=${icon}` : "",
       `"${this.escapeShell(title)}"`,
-      `"${this.escapeShell(message)}"`
-    ].filter(Boolean)
+      `"${this.escapeShell(message)}"`,
+    ].filter(Boolean);
 
     try {
-      await execAsync(args.join(' '))
-      return { success: true }
+      await execAsync(args.join(" "));
+      return { success: true };
     } catch (error) {
       return {
         success: false,
-        error: error instanceof Error ? error.message : 'Failed to send Linux notification'
-      }
+        error:
+          error instanceof Error
+            ? error.message
+            : "Failed to send Linux notification",
+      };
     }
   }
 
   /**
    * Send Windows notification using PowerShell
    */
-  private async sendWindowsNotification(options: NotificationOptions): Promise<NotificationResult> {
-    const { title, message } = options
-    
+  private async sendWindowsNotification(
+    options: NotificationOptions,
+  ): Promise<NotificationResult> {
+    const { title, message } = options;
+
     const script = `
       [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null
       [Windows.UI.Notifications.ToastNotification, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null
@@ -179,16 +199,19 @@ export class NotificationManager {
       $xml.LoadXml($template)
       $toast = New-Object Windows.UI.Notifications.ToastNotification $xml
       [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier("OpenCode Session Monitor").Show($toast)
-    `
+    `;
 
     try {
-      await execAsync(`powershell -Command "${script}"`)
-      return { success: true }
+      await execAsync(`powershell -Command "${script}"`);
+      return { success: true };
     } catch (error) {
       return {
         success: false,
-        error: error instanceof Error ? error.message : 'Failed to send Windows notification'
-      }
+        error:
+          error instanceof Error
+            ? error.message
+            : "Failed to send Windows notification",
+      };
     }
   }
 
@@ -196,80 +219,90 @@ export class NotificationManager {
    * Notify about session completion
    */
   async notifySessionCompleted(session: Session): Promise<NotificationResult> {
-    const duration = this.formatDuration(Date.now() - session.createdAt)
-    const cost = session.cost ? ` ($${session.cost.toFixed(3)})` : ''
-    
+    const duration = this.formatDuration(Date.now() - session.createdAt);
+    const cost = session.cost ? ` ($${session.cost.toFixed(3)})` : "";
+
     return this.sendNotification({
-      title: 'Session Completed',
+      title: "Session Completed",
       message: `${session.name} finished in ${duration}${cost}`,
-      sound: true
-    })
+      sound: true,
+    });
   }
 
   /**
    * Notify about session error
    */
-  async notifySessionError(session: Session, error?: string): Promise<NotificationResult> {
-    const errorMsg = error ? `: ${error}` : ''
-    
+  async notifySessionError(
+    session: Session,
+    error?: string,
+  ): Promise<NotificationResult> {
+    const errorMsg = error ? `: ${error}` : "";
+
     return this.sendNotification({
-      title: 'Session Error',
+      title: "Session Error",
       message: `${session.name} encountered an error${errorMsg}`,
       sound: true,
-      urgent: true
-    })
+      urgent: true,
+    });
   }
 
   /**
    * Notify about permission request
    */
-  async notifyPermissionRequest(event: PermissionRequestEvent): Promise<NotificationResult> {
+  async notifyPermissionRequest(
+    event: PermissionRequestEvent,
+  ): Promise<NotificationResult> {
     return this.sendNotification({
-      title: 'Permission Required',
+      title: "Permission Required",
       message: `${event.toolName} requires permission: ${event.description}`,
       sound: true,
-      urgent: true
-    })
+      urgent: true,
+    });
   }
 
   /**
    * Notify about long-running session
    */
-  async notifyLongRunningSession(session: Session): Promise<NotificationResult> {
-    const duration = this.formatDuration(Date.now() - session.createdAt)
-    
+  async notifyLongRunningSession(
+    session: Session,
+  ): Promise<NotificationResult> {
+    const duration = this.formatDuration(Date.now() - session.createdAt);
+
     return this.sendNotification({
-      title: 'Long-Running Session',
+      title: "Long-Running Session",
       message: `${session.name} has been running for ${duration}`,
-      sound: false
-    })
+      sound: false,
+    });
   }
 
   /**
    * Notify about server connection issues
    */
-  async notifyServerIssue(serverName: string, issue: string): Promise<NotificationResult> {
+  async notifyServerIssue(
+    serverName: string,
+    issue: string,
+  ): Promise<NotificationResult> {
     return this.sendNotification({
-      title: 'Server Issue',
+      title: "Server Issue",
       message: `${serverName}: ${issue}`,
       sound: false,
-      urgent: true
-    })
+      urgent: true,
+    });
   }
 
   /**
    * Clear notification cooldown for a specific key
    */
   clearCooldown(title: string, message: string): void {
-    const key = `${title}:${message}`
-    this.lastNotifications.delete(key)
+    const key = `${title}:${message}`;
+    this.lastNotifications.delete(key);
   }
 
   /**
    * Clear all notification cooldowns
    */
   clearAllCooldowns(): void {
-    this.lastNotifications.clear()
+    this.lastNotifications.clear();
   }
 
   // ---------------------------------------------------------------------------
@@ -277,25 +310,25 @@ export class NotificationManager {
   // ---------------------------------------------------------------------------
 
   private escapeAppleScript(text: string): string {
-    return text.replace(/"/g, '\\"').replace(/\\/g, '\\\\')
+    return text.replace(/"/g, '\\"').replace(/\\/g, "\\\\");
   }
 
   private escapeShell(text: string): string {
-    return text.replace(/"/g, '\\"').replace(/'/g, "\\'").replace(/\$/g, '\\$')
+    return text.replace(/"/g, '\\"').replace(/'/g, "\\'").replace(/\$/g, "\\$");
   }
 
   private escapePowerShell(text: string): string {
-    return text.replace(/"/g, '""').replace(/'/g, "''")
+    return text.replace(/"/g, '""').replace(/'/g, "''");
   }
 
   private formatDuration(milliseconds: number): string {
-    const seconds = Math.floor(milliseconds / 1000)
-    const minutes = Math.floor(seconds / 60)
-    const hours = Math.floor(minutes / 60)
-    
-    if (hours > 0) return `${hours}h ${minutes % 60}m`
-    if (minutes > 0) return `${minutes}m ${seconds % 60}s`
-    return `${seconds}s`
+    const seconds = Math.floor(milliseconds / 1000);
+    const minutes = Math.floor(seconds / 60);
+    const hours = Math.floor(minutes / 60);
+
+    if (hours > 0) return `${hours}h ${minutes % 60}m`;
+    if (minutes > 0) return `${minutes}m ${seconds % 60}s`;
+    return `${seconds}s`;
   }
 }
 
@@ -304,72 +337,93 @@ export class NotificationManager {
 // ---------------------------------------------------------------------------
 
 export class NotificationTrigger {
-  private notificationManager: NotificationManager
-  private config = getConfig()
-  private sessionStates = new Map<string, { status: string; lastNotified: number }>()
+  private notificationManager: NotificationManager;
+  private config = getConfig();
+  private sessionStates = new Map<
+    string,
+    { status: string; lastNotified: number }
+  >();
 
   constructor(notificationManager: NotificationManager) {
-    this.notificationManager = notificationManager
+    this.notificationManager = notificationManager;
   }
 
   /**
    * Handle session state change
    */
   async handleSessionUpdate(session: Session): Promise<void> {
-    if (!this.config.notifyEnabled) return
+    if (!this.config.notifyEnabled) return;
 
-    const previousState = this.sessionStates.get(session.id)
-    const currentTime = Date.now()
+    const previousState = this.sessionStates.get(session.id);
 
     // Update session state
     this.sessionStates.set(session.id, {
       status: session.status,
-      lastNotified: previousState?.lastNotified || 0
-    })
+      lastNotified: previousState?.lastNotified || 0,
+    });
 
     // Check for notification triggers
     if (previousState && previousState.status !== session.status) {
-      await this.checkStatusChangeNotification(session, previousState.status)
+      await this.checkStatusChangeNotification(session, previousState.status);
     }
 
     // Check for long-running session notification
-    await this.checkLongRunningNotification(session)
+    await this.checkLongRunningNotification(session);
   }
 
   /**
    * Handle permission request
    */
   async handlePermissionRequest(event: PermissionRequestEvent): Promise<void> {
-    if (!this.config.notifyEnabled) return
+    if (!this.config.notifyEnabled) return;
 
-    await this.notificationManager.notifyPermissionRequest(event)
+    await this.notificationManager.notifyPermissionRequest(event);
+  }
+
+  /**
+   * Handle application error
+   */
+  async handleError(error: AppError): Promise<void> {
+    if (!this.config.notifyEnabled) return;
+
+    await this.notificationManager.sendNotification({
+      title: "Monitor Error",
+      message: error.message,
+      urgent: true,
+    });
   }
 
   /**
    * Handle server error
    */
   async handleServerError(serverName: string, error: AppError): Promise<void> {
-    if (!this.config.notifyEnabled) return
+    if (!this.config.notifyEnabled) return;
 
-    await this.notificationManager.notifyServerIssue(serverName, error.message)
+    await this.notificationManager.notifyServerIssue(serverName, error.message);
   }
 
   /**
    * Check if status change should trigger notification
    */
-  private async checkStatusChangeNotification(session: Session, previousStatus: string): Promise<void> {
+  private async checkStatusChangeNotification(
+    session: Session,
+    previousStatus: string,
+  ): Promise<void> {
     // Notify on completion
-    if (session.status === 'completed' && previousStatus !== 'completed') {
-      await this.notificationManager.notifySessionCompleted(session)
+    if (session.status === "completed" && previousStatus !== "completed") {
+      await this.notificationManager.notifySessionCompleted(session);
     }
 
     // Notify on error
-    if (session.status === 'error' && previousStatus !== 'error') {
-      await this.notificationManager.notifySessionError(session)
+    if (session.status === "error" && previousStatus !== "error") {
+      await this.notificationManager.notifySessionError(session);
     }
 
     // Notify on permission request
-    if (session.status === 'waiting_for_permission' && previousStatus !== 'waiting_for_permission') {
+    if (
+      session.status === "waiting_for_permission" &&
+      previousStatus !== "waiting_for_permission"
+    ) {
       // Permission request notifications are handled separately
     }
   }
@@ -378,24 +432,25 @@ export class NotificationTrigger {
    * Check if session should trigger long-running notification
    */
   private async checkLongRunningNotification(session: Session): Promise<void> {
-    const sessionState = this.sessionStates.get(session.id)
-    if (!sessionState) return
+    const sessionState = this.sessionStates.get(session.id);
+    if (!sessionState) return;
 
-    const now = Date.now()
-    const sessionDuration = now - session.createdAt
-    const timeSinceLastNotification = now - sessionState.lastNotified
+    const now = Date.now();
+    const sessionDuration = now - session.createdAt;
+    const timeSinceLastNotification = now - sessionState.lastNotified;
 
     // Notify if session is long-running and we haven't notified recently
     if (
       sessionDuration > this.config.longRunningMs &&
       timeSinceLastNotification > 3600000 && // 1 hour
-      ['idle', 'busy'].includes(session.status)
+      ["idle", "busy"].includes(session.status)
     ) {
-      const result = await this.notificationManager.notifyLongRunningSession(session)
-      
+      const result =
+        await this.notificationManager.notifyLongRunningSession(session);
+
       if (result.success) {
-        sessionState.lastNotified = now
-        this.sessionStates.set(session.id, sessionState)
+        sessionState.lastNotified = now;
+        this.sessionStates.set(session.id, sessionState);
       }
     }
   }
@@ -405,11 +460,11 @@ export class NotificationTrigger {
    */
   cleanup(): void {
     // Remove states for sessions that haven't been updated in 24 hours
-    const cutoff = Date.now() - 86400000 // 24 hours
-    
+    const cutoff = Date.now() - 86400000; // 24 hours
+
     for (const [sessionId, state] of this.sessionStates) {
       if (state.lastNotified < cutoff) {
-        this.sessionStates.delete(sessionId)
+        this.sessionStates.delete(sessionId);
       }
     }
   }
@@ -419,5 +474,5 @@ export class NotificationTrigger {
 // Global Instances
 // ---------------------------------------------------------------------------
 
-export const notificationManager = new NotificationManager()
-export const notificationTrigger = new NotificationTrigger(notificationManager)
+export const notificationManager = new NotificationManager();
+export const notificationTrigger = new NotificationTrigger(notificationManager);

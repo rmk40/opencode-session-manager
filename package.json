@@ -27,7 +27,7 @@
   ],
   "license": "MIT",
   "dependencies": {
-    "@opencode-ai/sdk": "latest",
+    "@opencode-ai/sdk": "^1.0.201",
     "ink": "^6.6.0",
     "react": "^19.2.3"
   },

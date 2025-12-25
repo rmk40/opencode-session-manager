@@ -1,21 +1,28 @@
 // SSE connection manager for real-time updates from OpenCode servers
 
-import { EventEmitter } from 'node:events'
-import { SSEEvent, SessionEvent, SessionUpdateEvent, MessageEvent, PermissionRequestEvent, Result, AppError } from './types'
-import { getConfig } from './config'
+import { EventEmitter } from "node:events";
+import {
+  SessionUpdateEvent,
+  MessageEvent,
+  PermissionRequestEvent,
+  Result,
+  AppError,
+} from "./types";
+import { getConfig } from "./config";
+import { httpClientPool } from "./http-client";
 
 // ---------------------------------------------------------------------------
 // SSE Connection Events
 // ---------------------------------------------------------------------------
 
 export interface SSEConnectionEvents {
-  'connected': (serverUrl: string) => void
-  'disconnected': (serverUrl: string, reason: string) => void
-  'reconnecting': (serverUrl: string, attempt: number) => void
-  'session_update': (event: SessionUpdateEvent) => void
-  'message': (event: MessageEvent) => void
-  'permission_request': (event: PermissionRequestEvent) => void
-  'error': (error: AppError, serverUrl: string) => void
+  connected: (serverUrl: string) => void;
+  disconnected: (serverUrl: string, reason: string) => void;
+  reconnecting: (serverUrl: string, attempt: number) => void;
+  session_update: (event: SessionUpdateEvent) => void;
+  message: (event: MessageEvent) => void;
+  permission_request: (event: PermissionRequestEvent) => void;
+  error: (error: AppError, serverUrl: string) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -23,14 +30,19 @@ export interface SSEConnectionEvents {
 // ---------------------------------------------------------------------------
 
 export interface SSEConnectionState {
-  serverUrl: string
-  status: 'disconnected' | 'connecting' | 'connected' | 'reconnecting' | 'failed'
-  lastConnected?: number
-  lastError?: AppError
-  reconnectAttempts: number
-  maxReconnectAttempts: number
-  reconnectDelay: number
-  eventSource?: EventSource
+  serverUrl: string;
+  status:
+    | "disconnected"
+    | "connecting"
+    | "connected"
+    | "reconnecting"
+    | "failed";
+  lastConnected?: number;
+  lastError?: AppError;
+  reconnectAttempts: number;
+  maxReconnectAttempts: number;
+  reconnectDelay: number;
+  abortController?: AbortController;
 }
 
 // ---------------------------------------------------------------------------
@@ -38,12 +50,12 @@ export interface SSEConnectionState {
 // ---------------------------------------------------------------------------
 
 export class SSEConnectionManager extends EventEmitter {
-  private connections = new Map<string, SSEConnectionState>()
-  private config = getConfig()
-  private reconnectTimers = new Map<string, NodeJS.Timeout>()
+  private connections = new Map<string, SSEConnectionState>();
+  private config = getConfig();
+  private reconnectTimers = new Map<string, NodeJS.Timeout>();
 
   constructor() {
-    super()
+    super();
   }
 
   /**
@@ -51,90 +63,134 @@ export class SSEConnectionManager extends EventEmitter {
    */
   async connect(serverUrl: string): Promise<Result<void>> {
     try {
+      // Normalize server URL
+      const normalizedUrl = serverUrl.replace(/\/+$/, "");
+
       // Check if already connected or connecting
-      const existing = this.connections.get(serverUrl)
-      if (existing && ['connecting', 'connected'].includes(existing.status)) {
-        return { success: true }
+      const existing = this.connections.get(normalizedUrl);
+      if (existing && ["connecting", "connected"].includes(existing.status)) {
+        return { success: true };
       }
 
       // Initialize connection state
       const state: SSEConnectionState = {
-        serverUrl,
-        status: 'connecting',
+        serverUrl: normalizedUrl,
+        status: "connecting",
         reconnectAttempts: 0,
         maxReconnectAttempts: 10,
-        reconnectDelay: 1000
-      }
-      this.connections.set(serverUrl, state)
+        reconnectDelay: 1000,
+      };
+      this.connections.set(normalizedUrl, state);
 
-      // Create SSE connection
-      const sseUrl = `${serverUrl}/api/events`
-      const eventSource = new EventSource(sseUrl)
+      // Start subscription in background
+      this.startSubscription(normalizedUrl);
 
-      state.eventSource = eventSource
-
-      // Set up event handlers
-      eventSource.onopen = () => {
-        state.status = 'connected'
-        state.lastConnected = Date.now()
-        state.reconnectAttempts = 0
-        state.lastError = undefined
-        
-        if (this.config.debugFlags.sse) {
-          console.log(`SSE connected to ${serverUrl}`)
-        }
-        
-        this.emit('connected', serverUrl)
-      }
-
-      eventSource.onerror = (event) => {
-        const error: AppError = {
-          code: 'NETWORK_ERROR',
-          message: 'SSE connection error',
-          timestamp: Date.now(),
-          recoverable: true
-        }
-        
-        state.lastError = error
-        
-        if (this.config.debugFlags.sse) {
-          console.error(`SSE error for ${serverUrl}:`, event)
-        }
-        
-        this.emit('error', error, serverUrl)
-        this.handleConnectionError(serverUrl)
-      }
-
-      eventSource.onmessage = (event) => {
-        this.handleSSEMessage(serverUrl, event)
-      }
-
-      // Handle custom event types
-      eventSource.addEventListener('session_update', (event) => {
-        this.handleSSEMessage(serverUrl, event as MessageEvent)
-      })
-
-      eventSource.addEventListener('message', (event) => {
-        this.handleSSEMessage(serverUrl, event as MessageEvent)
-      })
-
-      eventSource.addEventListener('permission_request', (event) => {
-        this.handleSSEMessage(serverUrl, event as MessageEvent)
-      })
-
-      return { success: true }
+      return { success: true };
     } catch (error) {
       const appError: AppError = {
-        code: 'NETWORK_ERROR',
-        message: error instanceof Error ? error.message : 'Failed to connect to SSE',
+        code: "NETWORK_ERROR",
+        message:
+          error instanceof Error ? error.message : "Failed to connect to SSE",
         timestamp: Date.now(),
-        recoverable: true
-      }
+        recoverable: true,
+      };
 
       return {
         success: false,
-        error: appError
+        error: appError,
+      };
+    }
+  }
+
+  /**
+   * Start subscription using SDK client
+   */
+  private async startSubscription(serverUrl: string): Promise<void> {
+    const state = this.connections.get(serverUrl);
+    if (!state) return;
+
+    try {
+      const client = await httpClientPool.getClient(serverUrl);
+      if (!client) {
+        throw new Error("Failed to get HTTP client for SSE");
       }
+
+      state.status = "connected";
+      state.lastConnected = Date.now();
+      state.reconnectAttempts = 0;
+      this.emit("connected", serverUrl);
+
+      await client.subscribe((event) => {
+        this.handleSDKEvent(serverUrl, event);
+      });
+
+      // If subscribe completes, it means connection was closed
+      state.status = "disconnected";
+      this.emit("disconnected", serverUrl, "connection_closed");
+      this.handleConnectionError(serverUrl);
+    } catch (error) {
+      const appError: AppError = {
+        code: "NETWORK_ERROR",
+        message:
+          error instanceof Error ? error.message : "SSE subscription failed",
+        timestamp: Date.now(),
+        recoverable: true,
+      };
+
+      state.lastError = appError;
+      this.emit("error", appError, serverUrl);
+      this.handleConnectionError(serverUrl);
+    }
+  }
+
+  /**
+   * Handle event from SDK
+   */
+  private handleSDKEvent(serverUrl: string, event: any): void {
+    if (this.config.debugFlags.sse) {
+      console.log(`SSE event from ${serverUrl}:`, event);
+    }
+
+    // Map SDK events to our internal events
+    // Based on opencode SDK types.gen.ts
+    const type = event.type;
+    const props = event.properties;
+
+    if (!type || !props) return;
+
+    switch (type) {
+      case "session.status":
+        this.emit("session_update", {
+          type: "session_update",
+          sessionId: props.sessionID,
+          status: props.status.type === "busy" ? "busy" : props.status.type,
+          lastActivity: Date.now(),
+        });
+        break;
+      case "message.updated":
+        this.emit("message", {
+          type: "message",
+          sessionId: props.info.sessionID,
+          message: {
+            id: props.info.id,
+            sessionId: props.info.sessionID,
+            timestamp: props.info.time.created,
+            type:
+              props.info.role === "user" ? "user_input" : "assistant_response",
+            content: "", // Content is usually in parts, but we'll get it from refresh if needed
+          },
+        });
+        break;
+      case "permission.updated":
+        this.emit("permission_request", {
+          type: "permission_request",
+          sessionId: props.sessionID,
+          permissionId: props.id,
+          toolName: props.title,
+          toolArgs: props.metadata || {},
+          description: props.title,
+        });
+        break;
     }
   }
 
@@ -142,300 +198,157 @@ export class SSEConnectionManager extends EventEmitter {
    * Disconnect from SSE endpoint for a server
    */
   async disconnect(serverUrl: string): Promise<void> {
-    const state = this.connections.get(serverUrl)
-    if (!state) {
-      return
-    }
+    const state = this.connections.get(serverUrl);
+    if (!state) return;
 
     // Clear reconnect timer
-    const timer = this.reconnectTimers.get(serverUrl)
+    const timer = this.reconnectTimers.get(serverUrl);
     if (timer) {
-      clearTimeout(timer)
-      this.reconnectTimers.delete(serverUrl)
+      clearTimeout(timer);
+      this.reconnectTimers.delete(serverUrl);
     }
 
-    // Close EventSource
-    if (state.eventSource) {
-      state.eventSource.close()
-      state.eventSource = undefined
-    }
-
-    // Update state
-    state.status = 'disconnected'
-    
-    if (this.config.debugFlags.sse) {
-      console.log(`SSE disconnected from ${serverUrl}`)
-    }
-    
-    this.emit('disconnected', serverUrl, 'manual')
+    state.status = "disconnected";
+    this.emit("disconnected", serverUrl, "manual");
   }
 
   /**
    * Disconnect from all servers
    */
   async disconnectAll(): Promise<void> {
-    const serverUrls = Array.from(this.connections.keys())
-    await Promise.all(serverUrls.map(url => this.disconnect(url)))
-    this.connections.clear()
+    const serverUrls = Array.from(this.connections.keys());
+    await Promise.all(serverUrls.map((url) => this.disconnect(url)));
+    this.connections.clear();
   }
 
   /**
    * Get connection state for a server
    */
   getConnectionState(serverUrl: string): SSEConnectionState | undefined {
-    return this.connections.get(serverUrl)
+    return this.connections.get(serverUrl);
   }
 
   /**
    * Get all connection states
    */
   getAllConnectionStates(): Map<string, SSEConnectionState> {
-    return new Map(this.connections)
+    return new Map(this.connections);
   }
 
   /**
    * Check if connected to a server
    */
   isConnected(serverUrl: string): boolean {
-    const state = this.connections.get(serverUrl)
-    return state?.status === 'connected'
-  }
-
-  /**
-   * Handle SSE message
-   */
-  private handleSSEMessage(serverUrl: string, event: MessageEvent): void {
-    try {
-      const sseEvent = this.parseSSEEvent(event)
-      if (!sseEvent) {
-        return
-      }
-
-      const sessionEvent = this.parseSessionEvent(sseEvent)
-      if (!sessionEvent) {
-        return
-      }
-
-      if (this.config.debugFlags.sse) {
-        console.log(`SSE event from ${serverUrl}:`, sessionEvent)
-      }
-
-      // Emit typed events
-      switch (sessionEvent.type) {
-        case 'session_update':
-          this.emit('session_update', sessionEvent as SessionUpdateEvent)
-          break
-        case 'message':
-          this.emit('message', sessionEvent as MessageEvent)
-          break
-        case 'permission_request':
-          this.emit('permission_request', sessionEvent as PermissionRequestEvent)
-          break
-      }
-    } catch (error) {
-      const appError: AppError = {
-        code: 'INVALID_RESPONSE',
-        message: error instanceof Error ? error.message : 'Failed to parse SSE message',
-        timestamp: Date.now(),
-        recoverable: true
-      }
-
-      if (this.config.debugFlags.sse) {
-        console.error(`SSE message parsing error for ${serverUrl}:`, error)
-      }
-
-      this.emit('error', appError, serverUrl)
-    }
-  }
-
-  /**
-   * Parse SSE event from MessageEvent
-   */
-  private parseSSEEvent(event: MessageEvent): SSEEvent | null {
-    try {
-      const sseEvent: SSEEvent = {
-        id: (event as any).lastEventId,
-        event: (event as any).type,
-        data: event.data
-      }
-
-      return sseEvent
-    } catch (error) {
-      if (this.config.debugFlags.sse) {
-        console.error('Failed to parse SSE event:', error)
-      }
-      return null
-    }
-  }
-
-  /**
-   * Parse session event from SSE event data
-   */
-  private parseSessionEvent(sseEvent: SSEEvent): SessionEvent | null {
-    try {
-      const data = JSON.parse(sseEvent.data)
-      
-      // Validate event structure
-      if (!data.type || !data.sessionId) {
-        return null
-      }
-
-      return data as SessionEvent
-    } catch (error) {
-      if (this.config.debugFlags.sse) {
-        console.error('Failed to parse session event:', error)
-      }
-      return null
-    }
+    const state = this.connections.get(serverUrl);
+    return state?.status === "connected";
   }
 
   /**
    * Handle connection error and implement reconnection logic
    */
   private handleConnectionError(serverUrl: string): void {
-    const state = this.connections.get(serverUrl)
-    if (!state) {
-      return
-    }
-
-    // Close existing connection
-    if (state.eventSource) {
-      state.eventSource.close()
-      state.eventSource = undefined
-    }
+    const state = this.connections.get(serverUrl);
+    if (!state || state.status === "disconnected") return;
 
     // Check if we should attempt reconnection
     if (state.reconnectAttempts >= state.maxReconnectAttempts) {
-      state.status = 'failed'
-      this.emit('disconnected', serverUrl, 'max_retries_exceeded')
-      return
+      state.status = "failed";
+      this.emit("disconnected", serverUrl, "max_retries_exceeded");
+      return;
     }
 
     // Calculate exponential backoff delay
     const delay = Math.min(
       state.reconnectDelay * Math.pow(2, state.reconnectAttempts),
-      30000 // Max 30 seconds
-    )
+      30000, // Max 30 seconds
+    );
 
-    state.status = 'reconnecting'
-    state.reconnectAttempts++
+    state.status = "reconnecting";
+    state.reconnectAttempts++;
 
     if (this.config.debugFlags.sse) {
-      console.log(`SSE reconnecting to ${serverUrl} in ${delay}ms (attempt ${state.reconnectAttempts})`)
+      console.log(
+        `SSE reconnecting to ${serverUrl} in ${delay}ms (attempt ${state.reconnectAttempts})`,
+      );
     }
 
-    this.emit('reconnecting', serverUrl, state.reconnectAttempts)
+    this.emit("reconnecting", serverUrl, state.reconnectAttempts);
 
     // Schedule reconnection
     const timer = setTimeout(() => {
-      this.reconnectTimers.delete(serverUrl)
-      this.connect(serverUrl)
-    }, delay)
+      this.reconnectTimers.delete(serverUrl);
+      this.startSubscription(serverUrl);
+    }, delay);
 
-    this.reconnectTimers.set(serverUrl, timer)
+    this.reconnectTimers.set(serverUrl, timer);
   }
 }
-
-// ---------------------------------------------------------------------------
-// Utility Functions
-// ---------------------------------------------------------------------------
 
 /**
  * Create and configure SSE connection manager
  */
 export function createSSEManager(): SSEConnectionManager {
-  return new SSEConnectionManager()
+  return new SSEConnectionManager();
 }
 
 /**
- * Parse SSE event data string
+ * @deprecated Use SDK event handling
  */
-export function parseSSEData(data: string): SessionEvent | null {
+export function parseSSEData(data: string): any {
   try {
-    const parsed = JSON.parse(data)
-    
-    if (!parsed.type || !parsed.sessionId) {
-      return null
-    }
-
-    return parsed as SessionEvent
+    return JSON.parse(data);
   } catch {
-    return null
+    return null;
   }
 }
 
 /**
- * Validate session event structure
+ * @deprecated Use SDK event handling
  */
-export function isValidSessionEvent(event: unknown): event is SessionEvent {
-  if (typeof event !== 'object' || event === null) {
-    return false
-  }
-
-  const e = event as any
-  
-  if (typeof e.type !== 'string' || typeof e.sessionId !== 'string') {
-    return false
-  }
-
-  const validTypes = ['session_update', 'message', 'permission_request']
-  return validTypes.includes(e.type)
+export function isValidSessionEvent(event: any): boolean {
+  return !!(event && event.type);
 }
 
 /**
- * Create session update event
+ * @deprecated Use handleSDKEvent
  */
 export function createSessionUpdateEvent(
   sessionId: string,
-  status: string,
+  status: any,
   lastActivity: number,
-  metadata?: Record<string, unknown>
+  metadata?: any,
 ): SessionUpdateEvent {
-  return {
-    type: 'session_update',
-    sessionId,
-    status: status as any,
-    lastActivity,
-    metadata
-  }
+  return { type: "session_update", sessionId, status, lastActivity, metadata };
 }
 
 /**
- * Create message event
+ * @deprecated Use handleSDKEvent
  */
 export function createMessageEvent(
   sessionId: string,
-  message: any
+  message: any,
 ): MessageEvent {
-  return {
-    type: 'message',
-    sessionId,
-    message
-  }
+  return { type: "message", sessionId, message };
 }
 
 /**
- * Create permission request event
+ * @deprecated Use handleSDKEvent
  */
 export function createPermissionRequestEvent(
   sessionId: string,
   permissionId: string,
   toolName: string,
-  toolArgs: Record<string, unknown>,
-  description: string
+  toolArgs: any,
+  description: string,
 ): PermissionRequestEvent {
   return {
-    type: 'permission_request',
+    type: "permission_request",
     sessionId,
     permissionId,
     toolName,
     toolArgs,
-    description
-  }
+    description,
+  };
 }
 
-// ---------------------------------------------------------------------------
-// Global SSE Manager Instance
-// ---------------------------------------------------------------------------
-
-export const sseManager = createSSEManager()
+export const sseManager = new SSEConnectionManager();

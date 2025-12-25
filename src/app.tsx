@@ -1,43 +1,74 @@
 // Main application component and layout for OpenCode Session Monitor
 
-import React, { useEffect, useState } from 'react'
-import { render, Box, Text, useInput, useApp } from 'ink'
-import { AppStateProvider, useAppState } from './state'
-import { LayoutProvider, useLayout } from './layout'
-import { notificationTrigger } from './notifications'
+import { useEffect, useState, useMemo, createContext, useContext } from "react";
+import { render, Box, Text, useInput, useApp } from "ink";
+import { AppStateProvider, useAppState } from "./state";
+import { LayoutProvider, useLayout } from "./layout";
+import { groupSessions, sortGroups, sortSessions } from "./grouping";
+import { Session, SessionGroup } from "./types";
+
+// ---------------------------------------------------------------------------
+// Spinner Context for shared animation frame
+// ---------------------------------------------------------------------------
+
+const SpinnerContext = createContext(0);
+
+function useSpinner() {
+  return useContext(SpinnerContext);
+}
 
 // ---------------------------------------------------------------------------
 // Header Component
 // ---------------------------------------------------------------------------
 
 function Header() {
-  const { layout } = useLayout()
-  const { state } = useAppState()
-  
-  const serverCount = state.servers.size
-  const sessionCount = state.sessions.size
-  const activeCount = Array.from(state.sessions.values()).filter(s => 
-    !['completed', 'aborted', 'error'].includes(s.status)
-  ).length
+  const { layout, truncateText } = useLayout();
+  const { state } = useAppState();
+  const spinnerFrame = useSpinner();
+  const SPINNER_FRAMES = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
+  const serverCount = state.servers.size;
+  const sessions = Array.from(state.sessions.values());
+  const sessionCount = sessions.length;
+  const activeSessions = sessions.filter(
+    (s) => !["completed", "aborted", "error"].includes(s.status),
+  );
+  const activeCount = activeSessions.length;
+  const isBusy = activeSessions.some((s) => s.status === "busy");
+
+  // Available width inside root border and padding
+  const availableWidth = layout.size.width - 4;
 
   return (
     <Box flexDirection="column" height={layout.dimensions.headerHeight}>
       <Box justifyContent="center" borderStyle="double" borderColor="blue">
-        <Text bold color="blue">OpenCode Session Monitor</Text>
+        <Text bold color="blue" wrap="truncate-end">
+          {isBusy ? (
+            <Text color="yellow">{SPINNER_FRAMES[spinnerFrame]} </Text>
+          ) : (
+            ""
+          )}
+          {truncateText("OpenCode Session Monitor", availableWidth)}
+        </Text>
       </Box>
       <Box justifyContent="space-between" paddingX={1}>
-        <Text>
-          Servers: <Text color="green">{serverCount}</Text> | 
-          Sessions: <Text color="yellow">{sessionCount}</Text> | 
-          Active: <Text color="cyan">{activeCount}</Text>
-        </Text>
-        <Text>
-          View: <Text color="magenta">{state.currentView}</Text> | 
-          Group: <Text color="gray">{state.groupBy}</Text>
-        </Text>
+        <Box flexShrink={1}>
+          <Text wrap="truncate-end">
+            Servers: <Text color="green">{serverCount}</Text> | Sessions:{" "}
+            <Text color="yellow">{sessionCount}</Text> | Active:{" "}
+            <Text color="cyan">{activeCount}</Text>
+          </Text>
+        </Box>
+        <Box flexShrink={0} paddingLeft={2}>
+          <Text wrap="truncate-end">
+            View: <Text color="magenta">{state.currentView}</Text> | Group:{" "}
+            <Text color="gray">{state.groupBy}</Text> | Sort:{" "}
+            <Text color="gray">{state.sortBy}</Text>
+          </Text>
+        </Box>
       </Box>
     </Box>
-  )
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -45,27 +76,37 @@ function Header() {
 // ---------------------------------------------------------------------------
 
 function Footer() {
-  const { layout } = useLayout()
-  const { state } = useAppState()
-  
-  const keyHelp = state.currentView === 'list' 
-    ? 'q:quit | ↑↓:navigate | enter:view | g:group | s:sort | f:filter | h:help'
-    : state.currentView === 'session'
-    ? 'q:quit | esc:back | i:input | a:abort | r:refresh | h:help'
-    : 'q:quit | esc:back'
+  const { layout, truncateText } = useLayout();
+  const { state } = useAppState();
+
+  const keyHelp =
+    state.currentView === "list"
+      ? "q:quit | ↑↓:navigate | enter:view | g:group | s:sort | f:filter | h:help"
+      : state.currentView === "session"
+        ? "q:quit | esc:back | i:input | a:abort | ↑↓:scroll | h:help"
+        : "q:quit | esc:back";
+
+  const availableWidth = layout.size.width - 4;
 
   return (
     <Box height={layout.dimensions.footerHeight} flexDirection="column">
       <Box borderStyle="single" borderColor="gray" paddingX={1}>
-        <Text dimColor>{keyHelp}</Text>
+        <Text dimColor wrap="truncate-end">
+          {truncateText(keyHelp, availableWidth)}
+        </Text>
       </Box>
       {state.error && (
         <Box backgroundColor="red" paddingX={1}>
-          <Text color="white">Error: {state.error.message}</Text>
+          <Text color="white" bold>
+            Error:{" "}
+          </Text>
+          <Text color="white" wrap="truncate-end">
+            {truncateText(state.error.message, availableWidth - 8)}
+          </Text>
         </Box>
       )}
     </Box>
-  )
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -73,80 +114,195 @@ function Footer() {
 // ---------------------------------------------------------------------------
 
 function SessionList() {
-  const { state, selectSession, setView } = useAppState()
-  const { layout } = useLayout()
-  const [selectedIndex, setSelectedIndex] = useState(0)
-  
-  const sessions = Array.from(state.sessions.values())
-  const filteredSessions = state.showOnlyActive 
-    ? sessions.filter(s => !['completed', 'aborted', 'error'].includes(s.status))
-    : sessions
+  const {
+    state,
+    selectSession,
+    setView,
+    setGroupBy,
+    setSortBy,
+    toggleShowOnlyActive,
+    toggleGroupExpanded,
+  } = useAppState();
+  const { layout, truncateText } = useLayout();
+  const [selectedIndex, setSelectedIndex] = useState(0);
+
+  // Memoize grouped and sorted sessions
+  const groups = useMemo(() => {
+    const sessions = Array.from(state.sessions.values());
+    const filtered = state.showOnlyActive
+      ? sessions.filter(
+          (s) => !["completed", "aborted", "error"].includes(s.status),
+        )
+      : sessions;
+
+    const grouped = groupSessions(filtered, state.servers, state.groupBy);
+    const sortedGroups = sortGroups(grouped, state.sortBy);
+
+    return sortedGroups.map((g) => ({
+      ...g,
+      sessions: sortSessions(g.sessions, state.sortBy),
+      isExpanded: !state.expandedGroups.has(g.id),
+    }));
+  }, [
+    state.sessions,
+    state.servers,
+    state.groupBy,
+    state.sortBy,
+    state.showOnlyActive,
+    state.expandedGroups,
+  ]);
+
+  // Flatten groups for navigation
+  const flatItems = useMemo(() => {
+    const items: (
+      | { type: "group"; data: SessionGroup }
+      | { type: "session"; data: Session }
+    )[] = [];
+    for (const group of groups) {
+      items.push({ type: "group", data: group });
+      if (group.isExpanded) {
+        for (const session of group.sessions) {
+          items.push({ type: "session", data: session });
+        }
+      }
+    }
+    return items;
+  }, [groups]);
+
+  // Ensure selectedIndex is within bounds
+  useEffect(() => {
+    if (selectedIndex >= flatItems.length && flatItems.length > 0) {
+      setSelectedIndex(flatItems.length - 1);
+    }
+  }, [flatItems.length, selectedIndex]);
 
   // Handle keyboard input
   useInput((input, key) => {
-    if (state.currentView !== 'list') return
+    if (state.currentView !== "list") return;
 
-    if (key.upArrow) {
-      setSelectedIndex(Math.max(0, selectedIndex - 1))
-    } else if (key.downArrow) {
-      setSelectedIndex(Math.min(filteredSessions.length - 1, selectedIndex + 1))
+    if (key.upArrow || input === "k") {
+      setSelectedIndex(Math.max(0, selectedIndex - 1));
+    } else if (key.downArrow || input === "j") {
+      setSelectedIndex(Math.min(flatItems.length - 1, selectedIndex + 1));
     } else if (key.return) {
-      const selectedSession = filteredSessions[selectedIndex]
-      if (selectedSession) {
-        selectSession(selectedSession.id)
-        setView('session')
+      const selectedItem = flatItems[selectedIndex];
+      if (selectedItem?.type === "group") {
+        toggleGroupExpanded(selectedItem.data.id);
+      } else if (selectedItem?.type === "session") {
+        selectSession(selectedItem.data.id);
+        setView("session");
       }
+    } else if (input === "g") {
+      const modes: ("none" | "project" | "server")[] = [
+        "none",
+        "project",
+        "server",
+      ];
+      const currentIndex = modes.indexOf(state.groupBy);
+      setGroupBy(modes[(currentIndex + 1) % modes.length]);
+    } else if (input === "s") {
+      const modes: ("name" | "activity" | "created" | "cost")[] = [
+        "name",
+        "activity",
+        "created",
+        "cost",
+      ];
+      const currentIndex = modes.indexOf(state.sortBy);
+      setSortBy(modes[(currentIndex + 1) % modes.length]);
+    } else if (input === "f") {
+      toggleShowOnlyActive();
     }
-  })
+  });
 
-  const maxItems = Math.min(layout.maxListItems, layout.dimensions.contentHeight - 2)
-  const visibleSessions = filteredSessions.slice(0, maxItems)
+  const contentHeight = layout.dimensions.contentHeight - 2;
+  const visibleItems = flatItems.slice(0, contentHeight);
 
   return (
-    <Box flexDirection="column" height={layout.dimensions.contentHeight}>
+    <Box flexDirection="column" flexGrow={1}>
       <Box borderStyle="single" borderColor="gray" paddingX={1}>
-        <Text bold>Sessions ({filteredSessions.length})</Text>
+        <Text bold>
+          Sessions ({flatItems.filter((i) => i.type === "session").length})
+        </Text>
       </Box>
-      
-      {visibleSessions.length === 0 ? (
-        <Box justifyContent="center" alignItems="center" height="100%">
+
+      {flatItems.length === 0 ? (
+        <Box justifyContent="center" alignItems="center" flexGrow={1}>
           <Text dimColor>No sessions found</Text>
         </Box>
       ) : (
         <Box flexDirection="column">
-          {visibleSessions.map((session, index) => {
-            const isSelected = index === selectedIndex
-            const statusColor = getStatusColor(session.status)
-            const server = state.servers.get(session.serverId)
-            
+          {visibleItems.map((item, index) => {
+            const isSelected = index === selectedIndex;
+
+            if (item.type === "group") {
+              const groupLabel = `${item.data.isExpanded ? "▼" : "▶"} ${item.data.name} (${item.data.sessions.length})`;
+              const labelWidth = layout.size.width - 4; // root border + padding
+
+              return (
+                <Box
+                  key={`group-${item.data.id}`}
+                  backgroundColor={isSelected ? "blue" : undefined}
+                  paddingX={1}
+                >
+                  <Text
+                    bold
+                    color={isSelected ? "white" : "yellow"}
+                    wrap="truncate-end"
+                  >
+                    {truncateText(groupLabel, labelWidth)}
+                  </Text>
+                </Box>
+              );
+            }
+
+            const session = item.data;
+            const statusColor = getStatusColor(session.status);
+            const server = state.servers.get(session.serverId);
+
+            // Calculate available width for name
+            // layout.size.width - 2 (root border) - 2 (row padding) - 3 (status) - 15 (server) - 1 (safety)
+            const nameWidth = Math.max(10, layout.size.width - 23);
+
             return (
-              <Box key={session.id} backgroundColor={isSelected ? 'blue' : undefined}>
+              <Box
+                key={`session-${session.id}`}
+                backgroundColor={isSelected ? "blue" : undefined}
+                paddingLeft={2}
+              >
                 <Box width={3}>
                   <Text color={statusColor}>●</Text>
                 </Box>
-                <Box flexGrow={1}>
-                  <Text color={isSelected ? 'white' : undefined}>
-                    {layout.truncateText(session.name, layout.dimensions.contentWidth - 20)}
+                <Box width={nameWidth}>
+                  <Text
+                    color={isSelected ? "white" : undefined}
+                    wrap="truncate-end"
+                  >
+                    {truncateText(session.name, nameWidth)}
                   </Text>
                 </Box>
-                <Box width={15}>
+                <Box width={15} justifyContent="flex-end">
                   <Text dimColor>
-                    {server?.name || session.serverId}
+                    {truncateText(
+                      server?.name || session.serverId.slice(0, 8),
+                      15,
+                    )}
                   </Text>
                 </Box>
               </Box>
-            )
+            );
           })}
         </Box>
       )}
-      
-      {filteredSessions.length > maxItems && (
+
+      {flatItems.length > contentHeight && (
         <Box justifyContent="center" paddingTop={1}>
-          <Text dimColor>... and {filteredSessions.length - maxItems} more</Text>
+          <Text dimColor>
+            ... and {flatItems.length - contentHeight} more items
+          </Text>
         </Box>
       )}
     </Box>
-  )
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -154,202 +310,252 @@ function SessionList() {
 // ---------------------------------------------------------------------------
 
 function SessionView() {
-  const { state, setView, sendMessage, abortSession } = useAppState()
-  const { layout } = useLayout()
-  const [messageInput, setMessageInput] = useState('')
-  const [inputMode, setInputMode] = useState(false)
-  const [scrollOffset, setScrollOffset] = useState(0)
-  const [autoScroll, setAutoScroll] = useState(true)
-  
-  const session = state.selectedSessionId 
-    ? state.sessions.get(state.selectedSessionId)
-    : undefined
+  const { state, setView, sendMessage, abortSession } = useAppState();
+  const { layout, truncateText } = useLayout();
+  const [messageInput, setMessageInput] = useState("");
+  const [inputMode, setInputMode] = useState(false);
+  const [scrollOffset, setScrollOffset] = useState(0);
+  const [autoScroll, setAutoScroll] = useState(true);
 
-  // Auto-scroll to bottom when new messages arrive
-  useEffect(() => {
-    if (autoScroll && session) {
-      setScrollOffset(Math.max(0, session.messages.length - layout.maxMessageLines))
+  const session = state.selectedSessionId
+    ? state.sessions.get(state.selectedSessionId)
+    : undefined;
+
+  // Rendered lines for scrolling
+  const renderedLines = useMemo(() => {
+    if (!session) return [];
+
+    const lines: any[] = [];
+    const termWidth = layout.size.width;
+
+    // Header line
+    lines.push({
+      type: "session-header",
+      content: `Monitoring: ${session.name}`,
+    });
+    lines.push({ type: "spacer" });
+
+    for (const msg of session.messages) {
+      const role = msg.role === "user" ? "User" : "Assistant";
+      const cost = msg.metadata?.cost
+        ? ` $${msg.metadata.cost.toFixed(4)}`
+        : "";
+
+      lines.push({
+        type: "msg-header",
+        content: `┌─ ${role}${cost}`,
+        role: msg.role,
+      });
+
+      const parts = msg.parts || [];
+      if (parts.length === 0 && msg.content) {
+        // Fallback for simple messages
+        for (const line of msg.content.split("\n")) {
+          const wrapped = wrapText(line, termWidth - 10);
+          for (const w of wrapped) {
+            lines.push({ type: "msg-body", content: `│ ${w}` });
+          }
+        }
+      }
+
+      for (const part of parts) {
+        if (part.type === "text") {
+          const text = part.text || part.content || "";
+          for (const line of text.split("\n")) {
+            const wrapped = wrapText(line, termWidth - 10);
+            for (const w of wrapped) {
+              lines.push({ type: "msg-body", content: `│ ${w}` });
+            }
+          }
+        } else if (part.type === "tool" || part.type === "call") {
+          const name = part.tool || part.toolName || "unknown";
+          const state = part.state || { status: "pending" };
+          const status = state.status || "pending";
+          const icon =
+            status === "completed" ? "✓" : status === "error" ? "✗" : "○";
+
+          lines.push({
+            type: "msg-tool-start",
+            content: `│ ┌─ ${icon} ${state.title || name}`,
+          });
+
+          const args = formatToolArgs(state.input || part.toolArgs);
+          if (args) {
+            for (const w of wrapText(args, termWidth - 14)) {
+              lines.push({ type: "msg-tool-body", content: `│ │ ${w}` });
+            }
+          }
+
+          if (status === "completed" && state.output) {
+            const outLines = state.output.split("\n");
+            for (const line of outLines.slice(0, 5)) {
+              for (const w of wrapText(line, termWidth - 14)) {
+                lines.push({ type: "msg-tool-body", content: `│ │ ${w}` });
+              }
+            }
+            if (outLines.length > 5) {
+              lines.push({ type: "msg-tool-body", content: `│ │ ...` });
+            }
+          }
+          lines.push({
+            type: "msg-tool-end",
+            content: `│ └${"─".repeat(Math.min(30, termWidth - 14))}`,
+          });
+        } else if (part.type === "reasoning") {
+          lines.push({
+            type: "msg-reasoning-start",
+            content: `│ ┌─ Thinking...`,
+          });
+          const text = part.reasoning || part.text || "";
+          for (const line of text.split("\n")) {
+            for (const w of wrapText(line, termWidth - 14)) {
+              lines.push({ type: "msg-reasoning-body", content: `│ │ ${w}` });
+            }
+          }
+          lines.push({
+            type: "msg-reasoning-end",
+            content: `│ └${"─".repeat(Math.min(30, termWidth - 14))}`,
+          });
+        }
+      }
+
+      lines.push({
+        type: "msg-footer",
+        content: `└${"─".repeat(Math.min(40, termWidth - 10))}`,
+      });
+      lines.push({ type: "spacer" });
     }
-  }, [session?.messages.length, autoScroll, layout.maxMessageLines])
+
+    return lines;
+  }, [session, layout.size.width]);
+
+  // Auto-scroll to bottom
+  useEffect(() => {
+    if (autoScroll && renderedLines.length > 0) {
+      const maxLines = layout.dimensions.contentHeight - 8;
+      setScrollOffset(Math.max(0, renderedLines.length - maxLines));
+    }
+  }, [renderedLines.length, autoScroll, layout.dimensions.contentHeight]);
 
   // Handle keyboard input
   useInput((input, key) => {
-    if (state.currentView !== 'session') return
+    if (state.currentView !== "session") return;
 
     if (key.escape) {
       if (inputMode) {
-        setInputMode(false)
-        setMessageInput('')
+        setInputMode(false);
+        setMessageInput("");
       } else {
-        setView('list')
+        setView("list");
       }
-    } else if (input === 'i' && !inputMode && session) {
-      // Only allow input if session is active
-      if (['idle', 'busy', 'waiting_for_permission'].includes(session.status)) {
-        setInputMode(true)
+    } else if (input === "i" && !inputMode && session) {
+      if (["idle", "busy", "waiting_for_permission"].includes(session.status)) {
+        setInputMode(true);
       }
-    } else if (input === 'a' && !inputMode && session) {
-      // Abort session
-      abortSession(session.id)
-    } else if (key.return && inputMode && messageInput.trim()) {
-      // Send message
-      if (session) {
-        sendMessage(session.id, messageInput.trim())
-        setMessageInput('')
-        setInputMode(false)
+    } else if (input === "a" && !inputMode && session) {
+      abortSession(session.id);
+    } else if (key.return && inputMode) {
+      if (messageInput.trim() && session) {
+        sendMessage(session.id, messageInput.trim());
       }
+      setMessageInput("");
+      setInputMode(false);
     } else if (inputMode) {
-      // Handle text input
       if (key.backspace) {
-        setMessageInput(messageInput.slice(0, -1))
-      } else if (key.ctrl && input === 'c') {
-        // Cancel input with Ctrl+C
-        setInputMode(false)
-        setMessageInput('')
+        setMessageInput(messageInput.slice(0, -1));
+      } else if (key.ctrl && input === "c") {
+        setInputMode(false);
+        setMessageInput("");
       } else if (input && input.length === 1) {
-        setMessageInput(messageInput + input)
+        setMessageInput(messageInput + input);
       }
     } else if (!inputMode) {
-      // Handle scrolling when not in input mode
-      if (key.upArrow || input === 'k') {
-        setScrollOffset(Math.max(0, scrollOffset - 1))
-        setAutoScroll(false)
-      } else if (key.downArrow || input === 'j') {
-        const maxScroll = Math.max(0, (session?.messages.length || 0) - layout.maxMessageLines)
-        const newOffset = Math.min(maxScroll, scrollOffset + 1)
-        setScrollOffset(newOffset)
-        setAutoScroll(newOffset === maxScroll)
+      const maxLines = layout.dimensions.contentHeight - 8;
+      const maxScroll = Math.max(0, renderedLines.length - maxLines);
+
+      if (key.upArrow || input === "k") {
+        setScrollOffset(Math.max(0, scrollOffset - 1));
+        setAutoScroll(false);
+      } else if (key.downArrow || input === "j") {
+        const newOffset = Math.min(maxScroll, scrollOffset + 1);
+        setScrollOffset(newOffset);
+        setAutoScroll(newOffset === maxScroll);
       } else if (key.pageUp) {
-        setScrollOffset(Math.max(0, scrollOffset - layout.maxMessageLines))
-        setAutoScroll(false)
+        setScrollOffset(Math.max(0, scrollOffset - 10));
+        setAutoScroll(false);
       } else if (key.pageDown) {
-        const maxScroll = Math.max(0, (session?.messages.length || 0) - layout.maxMessageLines)
-        const newOffset = Math.min(maxScroll, scrollOffset + layout.maxMessageLines)
-        setScrollOffset(newOffset)
-        setAutoScroll(newOffset === maxScroll)
-      } else if (input === 'g') {
-        // Go to top
-        setScrollOffset(0)
-        setAutoScroll(false)
-      } else if (input === 'G') {
-        // Go to bottom
-        const maxScroll = Math.max(0, (session?.messages.length || 0) - layout.maxMessageLines)
-        setScrollOffset(maxScroll)
-        setAutoScroll(true)
+        const newOffset = Math.min(maxScroll, scrollOffset + 10);
+        setScrollOffset(newOffset);
+        setAutoScroll(newOffset === maxScroll);
+      } else if (input === "g") {
+        setScrollOffset(0);
+        setAutoScroll(false);
+      } else if (input === "G") {
+        setScrollOffset(maxScroll);
+        setAutoScroll(true);
       }
     }
-  })
+  });
 
   if (!session) {
     return (
-      <Box justifyContent="center" alignItems="center" height={layout.dimensions.contentHeight}>
+      <Box justifyContent="center" alignItems="center" flexGrow={1}>
         <Text color="red">Session not found</Text>
       </Box>
-    )
+    );
   }
 
-  const server = state.servers.get(session.serverId)
-  const maxMessageLines = Math.min(layout.maxMessageLines, layout.dimensions.contentHeight - 8)
-  
-  // Calculate visible messages based on scroll offset
-  const startIndex = Math.max(0, scrollOffset)
-  const endIndex = Math.min(session.messages.length, startIndex + maxMessageLines)
-  const visibleMessages = session.messages.slice(startIndex, endIndex)
-  
-  // Check if there are pending permission requests
-  const pendingPermissions = session.messages.filter(m => 
-    m.type === 'permission_request' && 
-    !session.messages.some(response => 
-      response.type === 'system_message' && 
-      response.content.includes(m.id)
-    )
-  )
+  const server = state.servers.get(session.serverId);
+  const maxLines = layout.dimensions.contentHeight - 8;
+  const visibleLines = renderedLines.slice(
+    scrollOffset,
+    scrollOffset + maxLines,
+  );
 
   return (
-    <Box flexDirection="column" height={layout.dimensions.contentHeight}>
-      {/* Session Header */}
+    <Box flexDirection="column" flexGrow={1}>
       <Box borderStyle="single" borderColor="gray" paddingX={1}>
-        <Text bold>{layout.truncateText(session.name, layout.dimensions.contentWidth - 30)}</Text>
+        <Text bold>
+          {truncateText(session.name, layout.dimensions.contentWidth - 30)}
+        </Text>
         <Text dimColor> - {server?.name || session.serverId}</Text>
       </Box>
-      
-      {/* Session Info */}
+
       <Box paddingX={1} flexDirection="row" justifyContent="space-between">
         <Box flexDirection="column">
           <Text>
-            Status: <Text color={getStatusColor(session.status)}>{session.status}</Text>
-            {session.isLongRunning && <Text color="orange"> (long-running)</Text>}
-          </Text>
-          <Text dimColor>
-            Created: {formatTimestamp(session.createdAt)}
+            Status:{" "}
+            <Text color={getStatusColor(session.status)}>{session.status}</Text>
+            {session.isLongRunning && (
+              <Text color="orange"> (long-running)</Text>
+            )}
           </Text>
         </Box>
         <Box flexDirection="column" alignItems="flex-end">
-          {session.cost !== undefined && (
-            <Text>
-              Cost: <Text color="green">${session.cost.toFixed(3)}</Text>
-            </Text>
-          )}
-          {session.tokens !== undefined && (
-            <Text>
-              Tokens: <Text color="yellow">{session.tokens.toLocaleString()}</Text>
-            </Text>
-          )}
+          <Text dimColor>Created: {formatTimestamp(session.createdAt)}</Text>
         </Box>
       </Box>
-      
-      {/* Pending Permissions Alert */}
-      {pendingPermissions.length > 0 && (
-        <Box backgroundColor="yellow" paddingX={1}>
-          <Text color="black" bold>
-            ⚠ {pendingPermissions.length} permission request(s) pending
-          </Text>
-        </Box>
-      )}
-      
-      {/* Messages */}
-      <Box flexDirection="column" flexGrow={1} borderStyle="single" borderColor="gray">
-        <Box paddingX={1} justifyContent="space-between">
-          <Text bold>Messages ({session.messages.length})</Text>
-          <Text dimColor>
-            {session.messages.length > maxMessageLines && (
-              `${startIndex + 1}-${endIndex} of ${session.messages.length}`
-            )}
-            {!autoScroll && ' [manual scroll]'}
-          </Text>
-        </Box>
-        
-        {session.messages.length === 0 ? (
+
+      <Box
+        flexDirection="column"
+        flexGrow={1}
+        borderStyle="single"
+        borderColor="gray"
+        paddingX={1}
+      >
+        {renderedLines.length === 0 ? (
           <Box justifyContent="center" alignItems="center" flexGrow={1}>
-            <Text dimColor>No messages yet</Text>
+            <Text dimColor>No activity recorded</Text>
           </Box>
         ) : (
-          <Box flexDirection="column" paddingX={1} flexGrow={1}>
-            {visibleMessages.map((message, index) => (
-              <MessageItem 
-                key={message.id} 
-                message={message} 
-                layout={layout}
-                isLatest={startIndex + index === session.messages.length - 1}
-              />
+          <Box flexDirection="column" flexGrow={1}>
+            {visibleLines.map((line, idx) => (
+              <RenderedLine key={`${scrollOffset}-${idx}`} line={line} />
             ))}
-            
-            {/* Scroll indicators */}
-            {startIndex > 0 && (
-              <Box justifyContent="center">
-                <Text dimColor>↑ {startIndex} more messages above ↑</Text>
-              </Box>
-            )}
-            {endIndex < session.messages.length && (
-              <Box justifyContent="center">
-                <Text dimColor>↓ {session.messages.length - endIndex} more messages below ↓</Text>
-              </Box>
-            )}
           </Box>
         )}
       </Box>
-      
-      {/* Input Area */}
+
       {inputMode ? (
         <Box borderStyle="single" borderColor="yellow" paddingX={1}>
           <Text color="yellow">Message: </Text>
@@ -359,103 +565,63 @@ function SessionView() {
       ) : (
         <Box paddingX={1} justifyContent="space-between">
           <Text dimColor>
-            {['idle', 'busy', 'waiting_for_permission'].includes(session.status)
-              ? 'Press "i" to send message, "a" to abort'
-              : 'Session is not active'
-            }
+            {["idle", "busy", "waiting_for_permission"].includes(session.status)
+              ? 'Press "i" to chat, "a" to abort'
+              : "Session is inactive"}
           </Text>
           <Text dimColor>
-            ↑↓/jk: scroll | PgUp/PgDn: page | g/G: top/bottom
+            {renderedLines.length > maxLines &&
+              `${scrollOffset + 1}-${scrollOffset + visibleLines.length} of ${renderedLines.length}`}
           </Text>
         </Box>
       )}
     </Box>
-  )
+  );
 }
 
 // ---------------------------------------------------------------------------
-// Message Item Component
+// Rendered Line Component
 // ---------------------------------------------------------------------------
 
-interface MessageItemProps {
-  message: any
-  layout: any
-  isLatest: boolean
-}
-
-function MessageItem({ message, layout, isLatest }: MessageItemProps) {
-  const timestamp = formatTimestamp(message.timestamp)
-  const maxContentWidth = layout.dimensions.contentWidth - 20
-  
-  // Handle different message types
-  const renderMessageContent = () => {
-    switch (message.type) {
-      case 'permission_request':
-        return (
-          <Box flexDirection="column">
-            <Text color="red" bold>Permission Required:</Text>
-            <Text>{layout.fitText(message.content, maxContentWidth)}</Text>
-            {message.metadata?.toolName && (
-              <Text dimColor>Tool: {message.metadata.toolName}</Text>
-            )}
-          </Box>
-        )
-      
-      case 'tool_execution':
-        return (
-          <Box flexDirection="column">
-            <Text color="yellow">
-              Tool: {message.metadata?.toolName || 'unknown'}
-            </Text>
-            <Text>{layout.fitText(message.content, maxContentWidth)}</Text>
-          </Box>
-        )
-      
-      case 'error_message':
-        return (
-          <Box flexDirection="column">
-            <Text color="red" bold>Error:</Text>
-            <Text color="red">{layout.fitText(message.content, maxContentWidth)}</Text>
-          </Box>
-        )
-      
-      default:
-        return (
-          <Text>{layout.fitText(message.content, maxContentWidth)}</Text>
-        )
-    }
+function RenderedLine({ line }: { line: any }) {
+  switch (line.type) {
+    case "session-header":
+      return (
+        <Text bold color="cyan">
+          {line.content}
+        </Text>
+      );
+    case "msg-header":
+      return (
+        <Text bold color={line.role === "user" ? "green" : "blue"}>
+          {line.content}
+        </Text>
+      );
+    case "msg-body":
+      return <Text>{line.content}</Text>;
+    case "msg-tool-start":
+      return <Text color="yellow">{line.content}</Text>;
+    case "msg-tool-body":
+      return <Text color="gray">{line.content}</Text>;
+    case "msg-tool-end":
+      return <Text color="yellow">{line.content}</Text>;
+    case "msg-reasoning-start":
+      return <Text color="magenta">{line.content}</Text>;
+    case "msg-reasoning-body":
+      return (
+        <Text italic color="gray">
+          {line.content}
+        </Text>
+      );
+    case "msg-reasoning-end":
+      return <Text color="magenta">{line.content}</Text>;
+    case "msg-footer":
+      return <Text dimColor>{line.content}</Text>;
+    case "spacer":
+      return <Text> </Text>;
+    default:
+      return <Text>{line.content}</Text>;
   }
-
-  return (
-    <Box marginBottom={1} flexDirection="column">
-      <Box>
-        <Box width={15}>
-          <Text color={getMessageTypeColor(message.type)} bold>
-            {message.type.replace('_', ' ')}:
-          </Text>
-        </Box>
-        <Box width={12}>
-          <Text dimColor>{timestamp}</Text>
-        </Box>
-        {isLatest && (
-          <Text color="green">●</Text>
-        )}
-      </Box>
-      <Box paddingLeft={2}>
-        {renderMessageContent()}
-      </Box>
-      
-      {/* Show cost/token info if available */}
-      {(message.metadata?.cost || message.metadata?.tokens) && (
-        <Box paddingLeft={2}>
-          <Text dimColor>
-            {message.metadata.cost && `Cost: $${message.metadata.cost.toFixed(3)} `}
-            {message.metadata.tokens && `Tokens: ${message.metadata.tokens}`}
-          </Text>
-        </Box>
-      )}
-    </Box>
-  )
 }
 
 // ---------------------------------------------------------------------------
@@ -463,53 +629,48 @@ function MessageItem({ message, layout, isLatest }: MessageItemProps) {
 // ---------------------------------------------------------------------------
 
 function HelpView() {
-  const { layout } = useLayout()
-  
   const helpText = [
-    'OpenCode Session Monitor - Help',
-    '',
-    'Navigation:',
-    '  ↑/↓ - Navigate list items',
-    '  Enter - Select/view item',
-    '  Esc - Go back',
-    '  q - Quit application',
-    '',
-    'List View:',
-    '  g - Change grouping mode',
-    '  s - Change sorting mode', 
-    '  f - Toggle active filter',
-    '  r - Refresh data',
-    '',
-    'Session View:',
-    '  i - Enter input mode',
-    '  a - Abort session',
-    '  r - Refresh session',
-    '',
-    'Input Mode:',
-    '  Type message and press Enter to send',
-    '  Esc to cancel input',
-    '',
-    'Status Indicators:',
-    '  ● Green - Idle',
-    '  ● Blue - Busy', 
-    '  ● Yellow - Waiting for permission',
-    '  ● Gray - Completed',
-    '  ● Red - Error/Aborted'
-  ]
+    "OpenCode Session Monitor - Help",
+    "",
+    "Navigation:",
+    "  ↑/↓, jk   - Navigate list items",
+    "  Enter     - Select/Expand item",
+    "  Esc       - Go back",
+    "  q         - Quit application",
+    "",
+    "List View:",
+    "  g - Toggle grouping (None / Project / Server)",
+    "  s - Toggle sorting (Name / Activity / Created / Cost)",
+    "  f - Toggle showing only active sessions",
+    "",
+    "Session View:",
+    "  i - Enter input mode (chat with session)",
+    "  a - Abort active session",
+    "  ↑/↓, jk   - Scroll message history",
+    "  g / G     - Scroll to top / bottom",
+    "",
+    "Status Indicators:",
+    "  ● Green  - Idle",
+    "  ● Blue   - Busy",
+    "  ● Yellow - Waiting for permission",
+    "  ● Gray   - Completed",
+    "  ● Red    - Error/Aborted",
+  ];
 
   return (
-    <Box flexDirection="column" height={layout.dimensions.contentHeight}>
+    <Box flexDirection="column" flexGrow={1}>
       <Box borderStyle="single" borderColor="gray" paddingX={1}>
         <Text bold>Help</Text>
       </Box>
-      
       <Box flexDirection="column" paddingX={2} paddingY={1}>
         {helpText.map((line, index) => (
-          <Text key={index} dimColor={line === ''}>{line || ' '}</Text>
+          <Text key={index} dimColor={line === ""}>
+            {line || " "}
+          </Text>
         ))}
       </Box>
     </Box>
-  )
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -517,81 +678,82 @@ function HelpView() {
 // ---------------------------------------------------------------------------
 
 function MainContent() {
-  const { state, setView, toggleShowOnlyActive, clearError } = useAppState()
-  
-  // Global keyboard handlers
-  useInput((input, key) => {
-    if (input === 'q') {
-      process.exit(0)
-    } else if (input === 'h') {
-      setView('help')
-    } else if (input === 'f' && state.currentView === 'list') {
-      toggleShowOnlyActive()
-    } else if (input === 'r') {
-      // Refresh logic would go here
-    } else if (key.escape && state.error) {
-      clearError()
-    }
-  })
+  const { state, setView } = useAppState();
 
-  // Set up notification handlers
-  useEffect(() => {
-    const handleSessionUpdate = (session: any) => {
-      notificationTrigger.handleSessionUpdate(session)
+  useInput((input) => {
+    if (input === "q") {
+      process.exit(0);
+    } else if (input === "h") {
+      setView("help");
     }
+  });
 
-    // This would be connected to the connection manager events
-    // For now, it's just a placeholder
-    
-    return () => {
-      // Cleanup
-    }
-  }, [])
-
-  switch (state.currentView) {
-    case 'session':
-      return <SessionView />
-    case 'help':
-      return <HelpView />
-    case 'list':
-    default:
-      return <SessionList />
-  }
+  return (
+    <Box flexGrow={1} flexDirection="column">
+      {state.currentView === "session" ? (
+        <SessionView />
+      ) : state.currentView === "help" ? (
+        <HelpView />
+      ) : (
+        <SessionList />
+      )}
+    </Box>
+  );
 }
 
 // ---------------------------------------------------------------------------
-// App Component
+// Root App Component
 // ---------------------------------------------------------------------------
 
-function App() {
-  const { exit } = useApp()
-  
+function AppInner() {
+  const { exit } = useApp();
+  const { layout } = useLayout();
+  const [spinnerFrame, setSpinnerFrame] = useState(0);
+
+  // Update spinner frame
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setSpinnerFrame((f) => (f + 1) % 10);
+    }, 100);
+    return () => clearInterval(timer);
+  }, []);
+
   // Handle process signals
   useEffect(() => {
-    const handleSignal = () => {
-      exit()
-    }
-    
-    process.on('SIGINT', handleSignal)
-    process.on('SIGTERM', handleSignal)
-    
+    const handleSignal = () => exit();
+    process.on("SIGINT", handleSignal);
+    process.on("SIGTERM", handleSignal);
     return () => {
-      process.off('SIGINT', handleSignal)
-      process.off('SIGTERM', handleSignal)
-    }
-  }, [exit])
+      process.off("SIGINT", handleSignal);
+      process.off("SIGTERM", handleSignal);
+    };
+  }, [exit]);
 
+  return (
+    <SpinnerContext.Provider value={spinnerFrame}>
+      <Box
+        flexDirection="column"
+        width={layout.size.width}
+        height={layout.size.height}
+        borderStyle="single"
+        borderColor="blue"
+      >
+        <Header />
+        <MainContent />
+        <Footer />
+      </Box>
+    </SpinnerContext.Provider>
+  );
+}
+
+export function App() {
   return (
     <AppStateProvider>
       <LayoutProvider>
-        <Box flexDirection="column" height="100%">
-          <Header />
-          <MainContent />
-          <Footer />
-        </Box>
+        <AppInner />
       </LayoutProvider>
     </AppStateProvider>
-  )
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -600,72 +762,75 @@ function App() {
 
 function getStatusColor(status: string): string {
   switch (status) {
-    case 'idle': return 'green'
-    case 'busy': return 'blue'
-    case 'waiting_for_permission': return 'yellow'
-    case 'completed': return 'gray'
-    case 'error':
-    case 'aborted': return 'red'
-    default: return 'white'
-  }
-}
-
-function getMessageTypeColor(type: string): string {
-  switch (type) {
-    case 'user_input': return 'cyan'
-    case 'assistant_response': return 'green'
-    case 'tool_execution': return 'yellow'
-    case 'permission_request': return 'red'
-    case 'system_message': return 'blue'
-    case 'error_message': return 'red'
-    default: return 'white'
+    case "idle":
+      return "green";
+    case "busy":
+      return "blue";
+    case "waiting_for_permission":
+      return "yellow";
+    case "completed":
+      return "gray";
+    case "error":
+    case "aborted":
+      return "red";
+    default:
+      return "white";
   }
 }
 
 function formatTimestamp(timestamp: number): string {
-  const date = new Date(timestamp)
-  const now = new Date()
-  const diffMs = now.getTime() - timestamp
-  
-  // If less than 1 minute ago, show seconds
-  if (diffMs < 60000) {
-    const seconds = Math.floor(diffMs / 1000)
-    return `${seconds}s ago`
-  }
-  
-  // If less than 1 hour ago, show minutes
-  if (diffMs < 3600000) {
-    const minutes = Math.floor(diffMs / 60000)
-    return `${minutes}m ago`
-  }
-  
-  // If today, show time
+  const date = new Date(timestamp);
+  const now = new Date();
+  const diffMs = now.getTime() - timestamp;
+
+  if (diffMs < 60000) return `${Math.floor(diffMs / 1000)}s ago`;
+  if (diffMs < 3600000) return `${Math.floor(diffMs / 60000)}m ago`;
+
   if (date.toDateString() === now.toDateString()) {
-    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+    return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   }
-  
-  // Otherwise show date and time
-  return date.toLocaleString([], { 
-    month: 'short', 
-    day: 'numeric', 
-    hour: '2-digit', 
-    minute: '2-digit' 
-  })
+  return date.toLocaleString([], {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 }
 
-// ---------------------------------------------------------------------------
-// Main Entry Point
-// ---------------------------------------------------------------------------
+function wrapText(text: string, maxWidth: number): string[] {
+  if (!text) return [""];
+  if (maxWidth <= 0) return [text];
 
-export default function main() {
-  // Check if stdin is a TTY for TUI mode
+  const lines: string[] = [];
+  let remaining = text;
+
+  while (remaining.length > maxWidth) {
+    let breakPoint = remaining.lastIndexOf(" ", maxWidth);
+    if (breakPoint <= 0) breakPoint = maxWidth;
+    lines.push(remaining.slice(0, breakPoint));
+    remaining = remaining.slice(breakPoint).trimStart();
+  }
+
+  if (remaining) lines.push(remaining);
+  return lines.length > 0 ? lines : [""];
+}
+
+function formatToolArgs(args: Record<string, unknown> | undefined): string {
+  if (!args || Object.keys(args).length === 0) return "";
+  const parts: string[] = [];
+  for (const [key, value] of Object.entries(args)) {
+    let valueStr = typeof value === "object" ? "[object]" : String(value);
+    if (valueStr.length > 50) valueStr = valueStr.slice(0, 47) + "...";
+    parts.push(`${key}: ${valueStr}`);
+  }
+  return parts.join(", ");
+}
+
+export default async function main() {
   if (!process.stdin.isTTY) {
-    console.error('Error: stdin is not a TTY. Run in an interactive terminal.')
-    process.exit(1)
+    console.error("Error: stdin is not a TTY. Run in an interactive terminal.");
+    process.exit(1);
   }
-
-  render(<App />)
+  const { waitUntilExit } = render(<App />);
+  await waitUntilExit();
 }
-
-// Export components for use in index.tsx and testing
-export { App, Header, Footer, SessionList, SessionView, HelpView }

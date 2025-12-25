@@ -1,21 +1,27 @@
 // UDP discovery and network communication layer for OpenCode instances
 
-import { createSocket, Socket } from 'node:dgram'
-import { EventEmitter } from 'node:events'
-import { URL } from 'node:url'
-import { AnnouncePacket, ShutdownPacket, UDPPacket, isAnnouncePacket, isShutdownPacket } from './types'
-import { getConfig } from './config'
+import { createSocket, Socket } from "node:dgram";
+import { EventEmitter } from "node:events";
+import { URL } from "node:url";
+import {
+  AnnouncePacket,
+  ShutdownPacket,
+  UDPPacket,
+  isAnnouncePacket,
+  isShutdownPacket,
+} from "./types";
+import { getConfig } from "./config";
 
 // ---------------------------------------------------------------------------
 // Events
 // ---------------------------------------------------------------------------
 
 export interface UDPDiscoveryEvents {
-  'server_announced': (packet: AnnouncePacket) => void
-  'server_shutdown': (packet: ShutdownPacket) => void
-  'error': (error: Error) => void
-  'listening': (port: number) => void
-  'stopped': () => void
+  server_announced: (packet: AnnouncePacket) => void;
+  server_shutdown: (packet: ShutdownPacket) => void;
+  error: (error: Error) => void;
+  listening: (port: number) => void;
+  stopped: () => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -23,12 +29,12 @@ export interface UDPDiscoveryEvents {
 // ---------------------------------------------------------------------------
 
 export class UDPDiscovery extends EventEmitter {
-  private socket: Socket | null = null
-  private isListening = false
-  private config = getConfig()
+  private socket: Socket | null = null;
+  private isListening = false;
+  private config = getConfig();
 
   constructor() {
-    super()
+    super();
   }
 
   /**
@@ -36,38 +42,38 @@ export class UDPDiscovery extends EventEmitter {
    */
   async start(): Promise<void> {
     if (this.isListening) {
-      return
+      return;
     }
 
     return new Promise((resolve, reject) => {
-      this.socket = createSocket('udp4')
+      this.socket = createSocket({ type: "udp4", reuseAddr: true });
 
-      this.socket.on('error', (error) => {
-        this.emit('error', error)
-        reject(error)
-      })
+      this.socket.on("error", (error) => {
+        this.emit("error", error);
+        reject(error);
+      });
 
-      this.socket.on('message', (buffer, rinfo) => {
+      this.socket.on("message", (buffer) => {
         try {
-          const packet = this.parsePacket(buffer, rinfo)
+          const packet = this.parsePacket(buffer);
           if (packet) {
-            this.handlePacket(packet)
+            this.handlePacket(packet);
           }
         } catch (error) {
           if (this.config.debugFlags.udp) {
-            console.error('UDP packet parsing error:', error)
+            console.error("UDP packet parsing error:", error);
           }
         }
-      })
+      });
 
-      this.socket.on('listening', () => {
-        this.isListening = true
-        this.emit('listening', this.config.port)
-        resolve()
-      })
+      this.socket.on("listening", () => {
+        this.isListening = true;
+        this.emit("listening", this.config.port);
+        resolve();
+      });
 
-      this.socket.bind(this.config.port)
-    })
+      this.socket.bind(this.config.port);
+    });
   }
 
   /**
@@ -75,46 +81,46 @@ export class UDPDiscovery extends EventEmitter {
    */
   async stop(): Promise<void> {
     if (!this.socket || !this.isListening) {
-      return
+      return;
     }
 
     return new Promise((resolve) => {
       this.socket!.close(() => {
-        this.isListening = false
-        this.socket = null
-        this.emit('stopped')
-        resolve()
-      })
-    })
+        this.isListening = false;
+        this.socket = null;
+        this.emit("stopped");
+        resolve();
+      });
+    });
   }
 
   /**
    * Parse incoming UDP packet
    */
-  private parsePacket(buffer: Buffer, rinfo: any): UDPPacket | null {
+  private parsePacket(buffer: Buffer): UDPPacket | null {
     try {
-      const message = buffer.toString('utf8')
-      const data = JSON.parse(message)
+      const message = buffer.toString("utf8");
+      const data = JSON.parse(message);
 
       // Validate packet structure
       if (!this.isValidPacket(data)) {
         if (this.config.debugFlags.udp) {
-          console.warn('Invalid UDP packet structure:', data)
+          console.warn("Invalid UDP packet structure:", data);
         }
-        return null
+        return null;
       }
 
       // Normalize server URL
       if (isAnnouncePacket(data)) {
-        data.serverUrl = this.normalizeServerUrl(data.serverUrl)
+        data.serverUrl = this.normalizeServerUrl(data.serverUrl);
       }
 
-      return data as UDPPacket
+      return data as UDPPacket;
     } catch (error) {
       if (this.config.debugFlags.udp) {
-        console.error('Failed to parse UDP packet:', error)
+        console.error("Failed to parse UDP packet:", error);
       }
-      return null
+      return null;
     }
   }
 
@@ -122,7 +128,7 @@ export class UDPDiscovery extends EventEmitter {
    * Validate packet structure
    */
   private isValidPacket(data: unknown): boolean {
-    return isAnnouncePacket(data) || isShutdownPacket(data)
+    return isAnnouncePacket(data) || isShutdownPacket(data);
   }
 
   /**
@@ -130,13 +136,13 @@ export class UDPDiscovery extends EventEmitter {
    */
   private handlePacket(packet: UDPPacket): void {
     if (this.config.debugFlags.udp) {
-      console.log('Received UDP packet:', packet)
+      console.log("Received UDP packet:", packet);
     }
 
     if (isAnnouncePacket(packet)) {
-      this.emit('server_announced', packet)
+      this.emit("server_announced", packet);
     } else if (isShutdownPacket(packet)) {
-      this.emit('server_shutdown', packet)
+      this.emit("server_shutdown", packet);
     }
   }
 
@@ -145,21 +151,21 @@ export class UDPDiscovery extends EventEmitter {
    */
   private normalizeServerUrl(url: string): string {
     try {
-      const parsed = new URL(url)
-      
+      const parsed = new URL(url);
+
       // Ensure protocol is http or https
-      if (!['http:', 'https:'].includes(parsed.protocol)) {
-        throw new Error(`Invalid protocol: ${parsed.protocol}`)
+      if (!["http:", "https:"].includes(parsed.protocol)) {
+        throw new Error(`Invalid protocol: ${parsed.protocol}`);
       }
 
       // Ensure port is specified
       if (!parsed.port) {
-        parsed.port = parsed.protocol === 'https:' ? '443' : '80'
+        parsed.port = parsed.protocol === "https:" ? "443" : "80";
       }
 
-      return parsed.toString()
+      return parsed.toString();
     } catch (error) {
-      throw new Error(`Invalid server URL: ${url} - ${error}`)
+      throw new Error(`Invalid server URL: ${url} - ${error}`);
     }
   }
 
@@ -168,39 +174,41 @@ export class UDPDiscovery extends EventEmitter {
    */
   async testConnection(serverUrl: string): Promise<boolean> {
     try {
-      const url = new URL(serverUrl)
+      const url = new URL(serverUrl);
       const response = await fetch(`${url.origin}/health`, {
-        method: 'GET',
+        method: "GET",
         signal: AbortSignal.timeout(5000), // 5 second timeout
-      })
-      
-      return response.ok
+      });
+
+      return response.ok;
     } catch (error) {
       if (this.config.debugFlags.udp) {
-        console.warn(`Connection test failed for ${serverUrl}:`, error)
+        console.warn(`Connection test failed for ${serverUrl}:`, error);
       }
-      return false
+      return false;
     }
   }
 
   /**
    * Validate server URL format and reachability
    */
-  async validateServerUrl(serverUrl: string): Promise<{ valid: boolean; normalized?: string; error?: string }> {
+  async validateServerUrl(
+    serverUrl: string,
+  ): Promise<{ valid: boolean; normalized?: string; error?: string }> {
     try {
-      const normalized = this.normalizeServerUrl(serverUrl)
-      const isReachable = await this.testConnection(normalized)
-      
+      const normalized = this.normalizeServerUrl(serverUrl);
+      const isReachable = await this.testConnection(normalized);
+
       return {
         valid: isReachable,
         normalized: isReachable ? normalized : undefined,
-        error: isReachable ? undefined : 'Server not reachable'
-      }
+        error: isReachable ? undefined : "Server not reachable",
+      };
     } catch (error) {
       return {
         valid: false,
-        error: error instanceof Error ? error.message : 'Unknown error'
-      }
+        error: error instanceof Error ? error.message : "Unknown error",
+      };
     }
   }
 
@@ -208,14 +216,14 @@ export class UDPDiscovery extends EventEmitter {
    * Get current listening status
    */
   get listening(): boolean {
-    return this.isListening
+    return this.isListening;
   }
 
   /**
    * Get current port
    */
   get port(): number {
-    return this.config.port
+    return this.config.port;
   }
 }
 
@@ -227,9 +235,9 @@ export class UDPDiscovery extends EventEmitter {
  * Create and start a UDP discovery instance
  */
 export async function createUDPDiscovery(): Promise<UDPDiscovery> {
-  const discovery = new UDPDiscovery()
-  await discovery.start()
-  return discovery
+  const discovery = new UDPDiscovery();
+  await discovery.start();
+  return discovery;
 }
 
 /**
@@ -237,16 +245,16 @@ export async function createUDPDiscovery(): Promise<UDPDiscovery> {
  */
 export function parseUDPMessage(buffer: Buffer): UDPPacket | null {
   try {
-    const message = buffer.toString('utf8')
-    const data = JSON.parse(message)
-    
+    const message = buffer.toString("utf8");
+    const data = JSON.parse(message);
+
     if (isAnnouncePacket(data) || isShutdownPacket(data)) {
-      return data as UDPPacket
+      return data as UDPPacket;
     }
-    
-    return null
+
+    return null;
   } catch {
-    return null
+    return null;
   }
 }
 
@@ -257,16 +265,16 @@ export function createAnnouncePacket(
   serverId: string,
   serverUrl: string,
   serverName: string,
-  version?: string
+  version?: string,
 ): AnnouncePacket {
   return {
-    type: 'announce',
+    type: "announce",
     serverId,
     serverUrl,
     serverName,
     version,
-    timestamp: Date.now()
-  }
+    timestamp: Date.now(),
+  };
 }
 
 /**
@@ -274,15 +282,15 @@ export function createAnnouncePacket(
  */
 export function createShutdownPacket(serverId: string): ShutdownPacket {
   return {
-    type: 'shutdown',
+    type: "shutdown",
     serverId,
-    timestamp: Date.now()
-  }
+    timestamp: Date.now(),
+  };
 }
 
 /**
  * Serialize a UDP packet to buffer
  */
 export function serializePacket(packet: UDPPacket): Buffer {
-  return Buffer.from(JSON.stringify(packet), 'utf8')
+  return Buffer.from(JSON.stringify(packet), "utf8");
 }
