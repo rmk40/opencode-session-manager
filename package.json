@@ -29,10 +29,12 @@
   "dependencies": {
     "@opencode-ai/sdk": "^1.0.201",
     "ink": "^6.6.0",
-    "ink-markdown": "^1.0.4",
+    "marked": "^15.0.12",
+    "marked-terminal": "^7.3.0",
     "react": "^19.2.3"
   },
   "devDependencies": {
+    "@types/marked-terminal": "^6.1.1",
     "@types/node": "^20.0.0",
     "@types/react": "^19.2.7",
     "@vitest/coverage-v8": "^4.0.16",

@@ -2,7 +2,9 @@
 
 import { useEffect, useState, useMemo, createContext, useContext } from "react";
 import { render, Box, Text, useInput, useApp } from "ink";
-import Markdown from "ink-markdown";
+import { marked } from "marked";
+// @ts-ignore
+import TerminalRenderer from "marked-terminal";
 import { AppStateProvider, useAppState } from "./state";
 import { LayoutProvider, useLayout } from "./layout";
 import { groupSessions, sortGroups, sortSessions } from "./grouping";
@@ -584,6 +586,20 @@ function SessionView() {
 // ---------------------------------------------------------------------------
 // Rendered Line Component
 // ---------------------------------------------------------------------------
+
+function Markdown({ children }: { children: string }) {
+  const [content, setContent] = useState("");
+
+  useEffect(() => {
+    marked.setOptions({
+      renderer: new TerminalRenderer(),
+    });
+    const parsed = marked.parse(children) as string;
+    setContent(parsed.trim());
+  }, [children]);
+
+  return <Text>{content}</Text>;
+}
 
 function RenderedLine({ line }: { line: any }) {
   const { layout } = useLayout();
