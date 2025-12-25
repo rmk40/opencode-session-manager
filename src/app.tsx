@@ -593,30 +593,69 @@ function RenderedLine({ line }: { line: any }) {
       );
     case "msg-header":
       return (
-        <Text bold color={line.role === "user" ? "green" : "blue"}>
-          {line.content}
-        </Text>
+        <Box
+          backgroundColor={line.role === "user" ? "green" : "blue"}
+          paddingX={1}
+        >
+          <Text bold color="white">
+            {line.content}
+          </Text>
+        </Box>
       );
     case "msg-body":
-      return <Text>{line.content}</Text>;
+      return (
+        <Box paddingLeft={1}>
+          <Text>{line.content}</Text>
+        </Box>
+      );
     case "msg-tool-start":
-      return <Text color="yellow">{line.content}</Text>;
+      return (
+        <Box paddingLeft={1}>
+          <Text color="yellow">{line.content}</Text>
+        </Box>
+      );
     case "msg-tool-body":
-      return <Text color="gray">{line.content}</Text>;
+      return (
+        <Box paddingLeft={1}>
+          <Box backgroundColor="white" paddingX={1}>
+            <Text color="black">{line.content}</Text>
+          </Box>
+        </Box>
+      );
     case "msg-tool-end":
-      return <Text color="yellow">{line.content}</Text>;
+      return (
+        <Box paddingLeft={1}>
+          <Text color="yellow">{line.content}</Text>
+        </Box>
+      );
     case "msg-reasoning-start":
-      return <Text color="magenta">{line.content}</Text>;
+      return (
+        <Box paddingLeft={1}>
+          <Text color="magenta">{line.content}</Text>
+        </Box>
+      );
     case "msg-reasoning-body":
       return (
-        <Text italic color="gray">
-          {line.content}
-        </Text>
+        <Box paddingLeft={1}>
+          <Box backgroundColor="black" paddingX={1}>
+            <Text italic color="gray">
+              {line.content}
+            </Text>
+          </Box>
+        </Box>
       );
     case "msg-reasoning-end":
-      return <Text color="magenta">{line.content}</Text>;
+      return (
+        <Box paddingLeft={1}>
+          <Text color="magenta">{line.content}</Text>
+        </Box>
+      );
     case "msg-footer":
-      return <Text dimColor>{line.content}</Text>;
+      return (
+        <Box paddingLeft={1}>
+          <Text dimColor>{line.content}</Text>
+        </Box>
+      );
     case "spacer":
       return <Text> </Text>;
     default:
