@@ -29,6 +29,7 @@
   "dependencies": {
     "@opencode-ai/sdk": "^1.0.201",
     "ink": "^6.6.0",
+    "ink-markdown": "^1.0.4",
     "react": "^19.2.3"
   },
   "devDependencies": {

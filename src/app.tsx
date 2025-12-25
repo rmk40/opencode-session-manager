@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useMemo, createContext, useContext } from "react";
 import { render, Box, Text, useInput, useApp } from "ink";
+import Markdown from "ink-markdown";
 import { AppStateProvider, useAppState } from "./state";
 import { LayoutProvider, useLayout } from "./layout";
 import { groupSessions, sortGroups, sortSessions } from "./grouping";
@@ -241,12 +242,12 @@ function SessionList() {
               return (
                 <Box
                   key={`group-${item.data.id}`}
-                  backgroundColor={isSelected ? "blue" : undefined}
+                  backgroundColor={isSelected ? "#264f78" : "#222222"}
                   paddingX={1}
                 >
                   <Text
                     bold
-                    color={isSelected ? "white" : "yellow"}
+                    color={isSelected ? "white" : "#d4af37"}
                     wrap="truncate-end"
                   >
                     {truncateText(groupLabel, labelWidth)}
@@ -266,7 +267,7 @@ function SessionList() {
             return (
               <Box
                 key={`session-${session.id}`}
-                backgroundColor={isSelected ? "blue" : undefined}
+                backgroundColor={isSelected ? "#264f78" : undefined}
                 paddingLeft={2}
               >
                 <Box width={3}>
@@ -274,14 +275,14 @@ function SessionList() {
                 </Box>
                 <Box width={nameWidth}>
                   <Text
-                    color={isSelected ? "white" : undefined}
+                    color={isSelected ? "white" : "#cccccc"}
                     wrap="truncate-end"
                   >
                     {truncateText(session.name, nameWidth)}
                   </Text>
                 </Box>
                 <Box width={15} justifyContent="flex-end">
-                  <Text dimColor>
+                  <Text color={isSelected ? "white" : "#666666"}>
                     {truncateText(
                       server?.name || session.serverId.slice(0, 8),
                       15,
@@ -353,7 +354,7 @@ function SessionView() {
         for (const line of msg.content.split("\n")) {
           const wrapped = wrapText(line, termWidth - 10);
           for (const w of wrapped) {
-            lines.push({ type: "msg-body", content: `│ ${w}` });
+            lines.push({ type: "msg-body", content: w });
           }
         }
       }
@@ -364,7 +365,7 @@ function SessionView() {
           for (const line of text.split("\n")) {
             const wrapped = wrapText(line, termWidth - 10);
             for (const w of wrapped) {
-              lines.push({ type: "msg-body", content: `│ ${w}` });
+              lines.push({ type: "msg-body", content: w });
             }
           }
         } else if (part.type === "tool" || part.type === "call") {
@@ -376,13 +377,13 @@ function SessionView() {
 
           lines.push({
             type: "msg-tool-start",
-            content: `│ ┌─ ${icon} ${state.title || name}`,
+            content: `┌─ ${icon} ${state.title || name}`,
           });
 
           const args = formatToolArgs(state.input || part.toolArgs);
           if (args) {
             for (const w of wrapText(args, termWidth - 14)) {
-              lines.push({ type: "msg-tool-body", content: `│ │ ${w}` });
+              lines.push({ type: "msg-tool-body", content: w });
             }
           }
 
@@ -390,31 +391,31 @@ function SessionView() {
             const outLines = state.output.split("\n");
             for (const line of outLines.slice(0, 5)) {
               for (const w of wrapText(line, termWidth - 14)) {
-                lines.push({ type: "msg-tool-body", content: `│ │ ${w}` });
+                lines.push({ type: "msg-tool-body", content: w });
               }
             }
             if (outLines.length > 5) {
-              lines.push({ type: "msg-tool-body", content: `│ │ ...` });
+              lines.push({ type: "msg-tool-body", content: "..." });
             }
           }
           lines.push({
             type: "msg-tool-end",
-            content: `│ └${"─".repeat(Math.min(30, termWidth - 14))}`,
+            content: `└${"─".repeat(Math.min(30, termWidth - 14))}`,
           });
         } else if (part.type === "reasoning") {
           lines.push({
             type: "msg-reasoning-start",
-            content: `│ ┌─ Thinking...`,
+            content: `┌─ Thinking...`,
           });
           const text = part.reasoning || part.text || "";
           for (const line of text.split("\n")) {
             for (const w of wrapText(line, termWidth - 14)) {
-              lines.push({ type: "msg-reasoning-body", content: `│ │ ${w}` });
+              lines.push({ type: "msg-reasoning-body", content: w });
             }
           }
           lines.push({
             type: "msg-reasoning-end",
-            content: `│ └${"─".repeat(Math.min(30, termWidth - 14))}`,
+            content: `└${"─".repeat(Math.min(30, termWidth - 14))}`,
           });
         }
       }
@@ -541,7 +542,8 @@ function SessionView() {
         flexGrow={1}
         borderStyle="single"
         borderColor="gray"
-        paddingX={1}
+        paddingX={0}
+        backgroundColor="#121212"
       >
         {renderedLines.length === 0 ? (
           <Box justifyContent="center" alignItems="center" flexGrow={1}>
@@ -584,17 +586,23 @@ function SessionView() {
 // ---------------------------------------------------------------------------
 
 function RenderedLine({ line }: { line: any }) {
+  const { layout } = useLayout();
+  const availableWidth = layout.size.width - 4;
+
   switch (line.type) {
     case "session-header":
       return (
-        <Text bold color="cyan">
-          {line.content}
-        </Text>
+        <Box width={availableWidth} paddingX={1} backgroundColor="#1a1a1a">
+          <Text bold color="cyan">
+            {line.content}
+          </Text>
+        </Box>
       );
     case "msg-header":
       return (
         <Box
-          backgroundColor={line.role === "user" ? "green" : "blue"}
+          width={availableWidth}
+          backgroundColor={line.role === "user" ? "#1e3a1e" : "#1e1e3a"}
           paddingX={1}
         >
           <Text bold color="white">
@@ -604,65 +612,74 @@ function RenderedLine({ line }: { line: any }) {
       );
     case "msg-body":
       return (
-        <Box paddingLeft={1}>
-          <Text>{line.content}</Text>
+        <Box width={availableWidth} paddingLeft={1} backgroundColor="#161616">
+          <Text color="#e0e0e0">│ </Text>
+          <Box flexGrow={1}>
+            <Markdown>{line.content}</Markdown>
+          </Box>
         </Box>
       );
     case "msg-tool-start":
       return (
-        <Box paddingLeft={1}>
-          <Text color="yellow">{line.content}</Text>
+        <Box width={availableWidth} paddingLeft={1} backgroundColor="#161616">
+          <Text color="#d4af37">│ {line.content}</Text>
         </Box>
       );
     case "msg-tool-body":
       return (
-        <Box paddingLeft={1}>
-          <Box backgroundColor="white" paddingX={1}>
-            <Text color="black">{line.content}</Text>
-          </Box>
+        <Box width={availableWidth} paddingLeft={1} backgroundColor="#1a1a1a">
+          <Text color="#aaaaaa">│ │ {line.content}</Text>
         </Box>
       );
     case "msg-tool-end":
       return (
-        <Box paddingLeft={1}>
-          <Text color="yellow">{line.content}</Text>
+        <Box width={availableWidth} paddingLeft={1} backgroundColor="#161616">
+          <Text color="#d4af37">│ {line.content}</Text>
         </Box>
       );
     case "msg-reasoning-start":
       return (
-        <Box paddingLeft={1}>
-          <Text color="magenta">{line.content}</Text>
+        <Box width={availableWidth} paddingLeft={1} backgroundColor="#161616">
+          <Text color="#8b008b">│ {line.content}</Text>
         </Box>
       );
     case "msg-reasoning-body":
       return (
-        <Box paddingLeft={1}>
-          <Box backgroundColor="black" paddingX={1}>
-            <Text italic color="gray">
-              {line.content}
-            </Text>
-          </Box>
+        <Box width={availableWidth} paddingLeft={1} backgroundColor="#121212">
+          <Text italic color="#777777">
+            │ │ {line.content}
+          </Text>
         </Box>
       );
     case "msg-reasoning-end":
       return (
-        <Box paddingLeft={1}>
-          <Text color="magenta">{line.content}</Text>
+        <Box width={availableWidth} paddingLeft={1} backgroundColor="#161616">
+          <Text color="#8b008b">│ {line.content}</Text>
         </Box>
       );
     case "msg-footer":
       return (
-        <Box paddingLeft={1}>
-          <Text dimColor>{line.content}</Text>
+        <Box width={availableWidth} paddingLeft={1} backgroundColor="#161616">
+          <Text color="#444444">{line.content}</Text>
         </Box>
       );
     case "spacer":
-      return <Text> </Text>;
+      return (
+        <Box height={1}>
+          <Text> </Text>
+        </Box>
+      );
     default:
-      return <Text>{line.content}</Text>;
+      return (
+        <Box width={availableWidth} paddingX={1}>
+          <Text>{line.content}</Text>
+        </Box>
+      );
   }
 }
 
+// ---------------------------------------------------------------------------
+// Help View Component
 // ---------------------------------------------------------------------------
 // Help View Component
 // ---------------------------------------------------------------------------
@@ -776,6 +793,7 @@ function AppInner() {
         height={layout.size.height}
         borderStyle="single"
         borderColor="blue"
+        backgroundColor="#0d0d0d"
       >
         <Header />
         <MainContent />
