@@ -24,36 +24,14 @@ function useSpinner() {
 // Markdown Rendering
 // ---------------------------------------------------------------------------
 
-const marked = new Marked().use(markedTerminal());
-
-function Markdown({ children }: { children: string }) {
-  const [content, setContent] = useState("");
-
-  useEffect(() => {
-    const parseMarkdown = async () => {
-      try {
-        // Try to parse as JSON first for structured app responses
-        if (children.trim().startsWith("{") && children.trim().endsWith("}")) {
-          try {
-            const obj = JSON.parse(children);
-            const prettyJson = JSON.stringify(obj, null, 2);
-            setContent(prettyJson);
-            return;
-          } catch (e) {
-            // Not JSON, continue to markdown
-          }
-        }
-
-        const parsed = await marked.parse(children);
-        setContent(String(parsed).trim());
-      } catch (err) {
-        setContent(children);
-      }
-    };
-    parseMarkdown();
-  }, [children]);
-
-  return <Text>{content}</Text>;
+function createMarked(width: number) {
+  return new Marked().use(
+    markedTerminal({
+      width: Math.max(20, width),
+      reflowText: true,
+      showSectionPrefix: false, // Don't show literal ####
+    }),
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -360,6 +338,12 @@ function SessionView() {
     ? state.sessions.get(state.selectedSessionId)
     : undefined;
 
+  // Initialized marked once per width change
+  const marked = useMemo(
+    () => createMarked(layout.size.width - 8),
+    [layout.size.width],
+  );
+
   // Rendered lines for scrolling
   const renderedLines = useMemo(() => {
     if (!session) return [];
@@ -387,13 +371,13 @@ function SessionView() {
       });
 
       const parts = msg.parts || [];
+
+      // If there are no parts, use raw content
       if (parts.length === 0 && msg.content) {
-        // Fallback for simple messages
-        for (const line of msg.content.split("\n")) {
-          const wrapped = wrapText(line, termWidth - 10);
-          for (const w of wrapped) {
-            lines.push({ type: "msg-body", content: w });
-          }
+        const markdown = String(msg.content);
+        const rendered = marked.parse(markdown) as string;
+        for (const line of rendered.trim().split("\n")) {
+          lines.push({ type: "msg-body", content: line });
         }
       }
 
@@ -406,15 +390,14 @@ function SessionView() {
           if (text.trim().startsWith("{") && text.trim().endsWith("}")) {
             try {
               const obj = JSON.parse(text);
-              displayContent = JSON.stringify(obj, null, 2);
+              displayContent =
+                "```json\n" + JSON.stringify(obj, null, 2) + "\n```";
             } catch (e) {}
           }
 
-          for (const line of displayContent.split("\n")) {
-            const wrapped = wrapText(line, termWidth - 10);
-            for (const w of wrapped) {
-              lines.push({ type: "msg-body", content: w });
-            }
+          const rendered = marked.parse(displayContent) as string;
+          for (const line of rendered.trim().split("\n")) {
+            lines.push({ type: "msg-body", content: line });
           }
         } else if (part.type === "tool" || part.type === "call") {
           const name = part.tool || part.toolName || "unknown";
@@ -436,13 +419,13 @@ function SessionView() {
           }
 
           if (status === "completed" && state.output) {
-            const outLines = state.output.split("\n");
-            for (const line of outLines.slice(0, 5)) {
+            const outLines = String(state.output).split("\n");
+            for (const line of outLines.slice(0, 10)) {
               for (const w of wrapText(line, termWidth - 14)) {
                 lines.push({ type: "msg-tool-body", content: w });
               }
             }
-            if (outLines.length > 5) {
+            if (outLines.length > 10) {
               lines.push({ type: "msg-tool-body", content: "..." });
             }
           }
@@ -456,15 +439,26 @@ function SessionView() {
             content: `┌─ Thinking...`,
           });
           const text = part.reasoning || part.text || "";
-          for (const line of text.split("\n")) {
-            for (const w of wrapText(line, termWidth - 14)) {
-              lines.push({ type: "msg-reasoning-body", content: w });
-            }
+          const rendered = marked.parse(text) as string;
+          for (const line of rendered.trim().split("\n")) {
+            lines.push({ type: "msg-reasoning-body", content: line });
           }
           lines.push({
             type: "msg-reasoning-end",
             content: `└${"─".repeat(Math.min(30, termWidth - 14))}`,
           });
+        } else if (part.type === "step-start") {
+          lines.push({ type: "msg-tool-start", content: `┌─ STEP STARTED` });
+          lines.push({ type: "msg-tool-end", content: `└${"─".repeat(30)}` });
+        } else if (part.type === "step-finish") {
+          lines.push({ type: "msg-tool-start", content: `┌─ STEP FINISHED` });
+          if ((part as any).reason) {
+            lines.push({
+              type: "msg-tool-body",
+              content: `Reason: ${(part as any).reason}`,
+            });
+          }
+          lines.push({ type: "msg-tool-end", content: `└${"─".repeat(30)}` });
         } else {
           // Handle other part types like 'agent', 'subtask', 'patch', etc.
           const typeLabel = part.type.toUpperCase();
@@ -497,7 +491,7 @@ function SessionView() {
     }
 
     return lines;
-  }, [session, layout.size.width]);
+  }, [session, layout.size.width, marked]);
 
   // Auto-scroll to bottom
   useEffect(() => {
@@ -684,7 +678,7 @@ function RenderedLine({ line }: { line: any }) {
         <Box width={availableWidth} paddingLeft={1} backgroundColor="#161616">
           <Text color="#e0e0e0">│ </Text>
           <Box flexGrow={1}>
-            <Markdown>{line.content}</Markdown>
+            <Text>{line.content}</Text>
           </Box>
         </Box>
       );
