@@ -1,0 +1,44 @@
+{
+  "name": "opencode-session-monitor",
+  "version": "0.1.0",
+  "description": "TUI dashboard for monitoring and managing OpenCode sessions",
+  "type": "module",
+  "main": "dist/opencode-session-monitor.mjs",
+  "bin": {
+    "opencode-session-monitor": "dist/opencode-session-monitor.mjs"
+  },
+  "scripts": {
+    "dev": "tsx watch src/index.tsx",
+    "build": "tsup src/index.tsx --format esm --outDir dist --clean && mv dist/index.js dist/opencode-session-monitor.mjs",
+    "start": "node dist/opencode-session-monitor.mjs",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "install-plugin": "mkdir -p ~/.config/opencode/plugin && cp opencode/plugin/opencode-session-monitor.js ~/.config/opencode/plugin/",
+    "link-plugin": "mkdir -p ~/.config/opencode/plugin && ln -sf \"$(pwd)/opencode/plugin/opencode-session-monitor.js\" ~/.config/opencode/plugin/",
+    "uninstall-plugin": "rm -f ~/.config/opencode/plugin/opencode-session-monitor.js"
+  },
+  "keywords": [
+    "opencode",
+    "tui",
+    "session",
+    "monitor",
+    "terminal"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "@opencode-ai/sdk": "latest",
+    "ink": "^6.6.0",
+    "react": "^19.2.3"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/react": "^19.2.7",
+    "@vitest/coverage-v8": "^4.0.16",
+    "fast-check": "^3.15.0",
+    "tsup": "^8.0.0",
+    "tsx": "^4.0.0",
+    "typescript": "^5.0.0",
+    "vitest": "^4.0.16"
+  }
+}
