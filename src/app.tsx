@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useMemo, createContext, useContext } from "react";
 import { render, Box, Text, useInput, useApp } from "ink";
-import { marked } from "marked";
+import { Marked } from "marked";
 // @ts-ignore
 import TerminalRenderer from "marked-terminal";
 import { AppStateProvider, useAppState } from "./state";
@@ -18,6 +18,32 @@ const SpinnerContext = createContext(0);
 
 function useSpinner() {
   return useContext(SpinnerContext);
+}
+
+// ---------------------------------------------------------------------------
+// Markdown Rendering
+// ---------------------------------------------------------------------------
+
+const marked = new Marked({
+  renderer: new TerminalRenderer(),
+});
+
+function Markdown({ children }: { children: string }) {
+  const [content, setContent] = useState("");
+
+  useEffect(() => {
+    const parseMarkdown = async () => {
+      try {
+        const parsed = await marked.parse(children);
+        setContent(String(parsed).trim());
+      } catch (err) {
+        setContent(children);
+      }
+    };
+    parseMarkdown();
+  }, [children]);
+
+  return <Text>{content}</Text>;
 }
 
 // ---------------------------------------------------------------------------
@@ -587,20 +613,6 @@ function SessionView() {
 // Rendered Line Component
 // ---------------------------------------------------------------------------
 
-function Markdown({ children }: { children: string }) {
-  const [content, setContent] = useState("");
-
-  useEffect(() => {
-    marked.setOptions({
-      renderer: new TerminalRenderer(),
-    });
-    const parsed = marked.parse(children) as string;
-    setContent(parsed.trim());
-  }, [children]);
-
-  return <Text>{content}</Text>;
-}
-
 function RenderedLine({ line }: { line: any }) {
   const { layout } = useLayout();
   const availableWidth = layout.size.width - 4;
@@ -694,8 +706,6 @@ function RenderedLine({ line }: { line: any }) {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Help View Component
 // ---------------------------------------------------------------------------
 // Help View Component
 // ---------------------------------------------------------------------------
