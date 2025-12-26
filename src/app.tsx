@@ -778,7 +778,6 @@ function SessionView() {
         flexGrow={1}
         borderStyle="single"
         borderColor="gray"
-        backgroundColor="#121212"
         width="100%"
       >
         {renderedLines.length === 0 ? (
@@ -838,7 +837,7 @@ const RenderedLine = React.memo(({ line }: { line: any }) => {
   switch (line.type) {
     case "session-header":
       return (
-        <Box width="100%" paddingX={1} backgroundColor="#1a1a1a">
+        <Box width="100%" paddingX={1}>
           <Text bold color="cyan">
             {line.content}
           </Text>
@@ -858,7 +857,7 @@ const RenderedLine = React.memo(({ line }: { line: any }) => {
       );
     case "msg-body":
       return (
-        <Box width="100%" backgroundColor="#161616">
+        <Box width="100%">
           <Text color="#e0e0e0">{line.content === "" ? "│" : "│ "}</Text>
           <Box flexGrow={1}>
             <Text>{line.content}</Text>
@@ -867,31 +866,31 @@ const RenderedLine = React.memo(({ line }: { line: any }) => {
       );
     case "msg-tool-start":
       return (
-        <Box width="100%" backgroundColor="#161616">
+        <Box width="100%">
           <Text color="#d4af37">│ {line.content}</Text>
         </Box>
       );
     case "msg-tool-body":
       return (
-        <Box width="100%" backgroundColor="#1a1a1a">
+        <Box width="100%">
           <Text color="#aaaaaa">│ │ {line.content}</Text>
         </Box>
       );
     case "msg-tool-end":
       return (
-        <Box width="100%" backgroundColor="#161616">
+        <Box width="100%">
           <Text color="#d4af37">│ {line.content}</Text>
         </Box>
       );
     case "msg-reasoning-start":
       return (
-        <Box width="100%" backgroundColor="#161616">
+        <Box width="100%">
           <Text color="#8b008b">│ {line.content}</Text>
         </Box>
       );
     case "msg-reasoning-body":
       return (
-        <Box width="100%" backgroundColor="#121212">
+        <Box width="100%">
           <Text italic color="#777777">
             │ │ {line.content}
           </Text>
@@ -899,13 +898,13 @@ const RenderedLine = React.memo(({ line }: { line: any }) => {
       );
     case "msg-reasoning-end":
       return (
-        <Box width="100%" backgroundColor="#161616">
+        <Box width="100%">
           <Text color="#8b008b">│ {line.content}</Text>
         </Box>
       );
     case "msg-footer":
       return (
-        <Box width="100%" backgroundColor="#161616">
+        <Box width="100%">
           <Text color="#444444">{line.content}</Text>
         </Box>
       );
