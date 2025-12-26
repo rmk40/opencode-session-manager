@@ -7,6 +7,7 @@ import React, {
   useEffect,
   useMemo,
   ReactNode,
+  useRef,
 } from "react";
 import {
   AppState,
@@ -27,43 +28,7 @@ import { connectionManager } from "./connection-manager";
 function stateReducer(state: AppState, action: StateAction): AppState {
   switch (action.type) {
     case "BATCH": {
-      // Optimization: Only clone Maps once per batch
-      let newServers: Map<string, Server> | null = null;
-      let newSessions: Map<string, Session> | null = null;
-      let newState = { ...state };
-
-      for (const a of action.actions) {
-        switch (a.type) {
-          case "ADD_SERVER":
-          case "UPDATE_SERVER":
-            if (!newServers) newServers = new Map(newState.servers);
-            newServers.set(a.server.id, a.server);
-            newState.servers = newServers;
-            break;
-          case "REMOVE_SERVER":
-            if (!newServers) newServers = new Map(newState.servers);
-            newServers.delete(a.serverId);
-            newState.servers = newServers;
-            break;
-          case "ADD_SESSION":
-          case "UPDATE_SESSION":
-            if (!newSessions) newSessions = new Map(newState.sessions);
-            newSessions.set(a.session.id, a.session);
-            newState.sessions = newSessions;
-            break;
-          case "REMOVE_SESSION":
-            if (!newSessions) newSessions = new Map(newState.sessions);
-            newSessions.delete(a.sessionId);
-            newState.sessions = newSessions;
-            if (newState.selectedSessionId === a.sessionId) {
-              newState.selectedSessionId = undefined;
-            }
-            break;
-          default:
-            newState = stateReducer(newState, a);
-        }
-      }
-      return newState;
+      return action.actions.reduce(stateReducer, state);
     }
 
     case "SET_SERVERS":
@@ -227,21 +192,18 @@ export function AppStateProvider({ children }: AppStateProviderProps) {
   const [state, dispatch] = useReducer(stateReducer, initialState);
 
   // Implement action batching to prevent TUI flickering from high-frequency updates
-  const actionQueue = useMemo<StateAction[]>(() => [], []);
-  const batchTimeout = useMemo<{ timer: NodeJS.Timeout | null }>(
-    () => ({ timer: null }),
-    [],
-  );
+  const actionQueue = useRef<StateAction[]>([]);
+  const batchTimer = useRef<NodeJS.Timeout | null>(null);
 
   const batchedDispatch = (action: StateAction) => {
-    actionQueue.push(action);
+    actionQueue.current.push(action);
 
-    if (!batchTimeout.timer) {
-      batchTimeout.timer = setTimeout(() => {
-        batchTimeout.timer = null;
-        if (actionQueue.length > 0) {
-          const batch = [...actionQueue];
-          actionQueue.length = 0;
+    if (!batchTimer.current) {
+      batchTimer.current = setTimeout(() => {
+        batchTimer.current = null;
+        if (actionQueue.current.length > 0) {
+          const batch = [...actionQueue.current];
+          actionQueue.current = [];
           dispatch({ type: "BATCH", actions: batch });
         }
       }, 50); // 50ms batching window
@@ -434,49 +396,108 @@ export function useAppState(): AppContextType {
 }
 
 // ---------------------------------------------------------------------------
-// Selector hooks for specific data
+// Selector hooks for specific data (Granular to prevent over-subscription)
 // ---------------------------------------------------------------------------
 
 export function useServers(): Server[] {
-  const { state } = useAppState();
-  return Array.from(state.servers.values());
+  const context = useContext(AppContext);
+  if (!context)
+    throw new Error("useAppState must be used within an AppStateProvider");
+  return useMemo(
+    () => Array.from(context.state.servers.values()),
+    [context.state.servers],
+  );
 }
 
 export function useSessions(): Session[] {
-  const { state } = useAppState();
-  return Array.from(state.sessions.values());
+  const context = useContext(AppContext);
+  if (!context)
+    throw new Error("useAppState must be used within an AppStateProvider");
+  return useMemo(
+    () => Array.from(context.state.sessions.values()),
+    [context.state.sessions],
+  );
 }
 
 export function useActiveSessions(): Session[] {
-  const { state } = useAppState();
-  return Array.from(state.sessions.values()).filter(
-    (session) => !["completed", "aborted", "error"].includes(session.status),
+  const sessions = useSessions();
+  return useMemo(
+    () =>
+      sessions.filter(
+        (session) =>
+          !["completed", "aborted", "error"].includes(session.status),
+      ),
+    [sessions],
   );
+}
+
+export function useSelectedSessionId(): string | undefined {
+  const context = useContext(AppContext);
+  if (!context)
+    throw new Error("useAppState must be used within an AppStateProvider");
+  return context.state.selectedSessionId;
 }
 
 export function useSelectedSession(): Session | undefined {
-  const { state } = useAppState();
-  return state.selectedSessionId
-    ? state.sessions.get(state.selectedSessionId)
-    : undefined;
-}
-
-export function useFilteredSessions(): Session[] {
-  const { state } = useAppState();
-  const sessions = Array.from(state.sessions.values());
-
-  if (state.showOnlyActive) {
-    return sessions.filter(
-      (session) => !["completed", "aborted", "error"].includes(session.status),
-    );
-  }
-
-  return sessions;
-}
-
-export function useSessionsForServer(serverId: string): Session[] {
-  const { state } = useAppState();
-  return Array.from(state.sessions.values()).filter(
-    (session) => session.serverId === serverId,
+  const context = useContext(AppContext);
+  const sessionId = useSelectedSessionId();
+  if (!context)
+    throw new Error("useAppState must be used within an AppStateProvider");
+  return useMemo(
+    () => (sessionId ? context.state.sessions.get(sessionId) : undefined),
+    [context.state.sessions, sessionId],
   );
+}
+
+export function useCurrentView(): ViewMode {
+  const context = useContext(AppContext);
+  if (!context)
+    throw new Error("useAppState must be used within an AppStateProvider");
+  return context.state.currentView;
+}
+
+export function useGroupingAndSorting() {
+  const context = useContext(AppContext);
+  if (!context)
+    throw new Error("useAppState must be used within an AppStateProvider");
+  return useMemo(
+    () => ({
+      groupBy: context.state.groupBy,
+      sortBy: context.state.sortBy,
+      showOnlyActive: context.state.showOnlyActive,
+      expandedGroups: context.state.expandedGroups,
+    }),
+    [
+      context.state.groupBy,
+      context.state.sortBy,
+      context.state.showOnlyActive,
+      context.state.expandedGroups,
+    ],
+  );
+}
+
+export function useAppError(): AppError | null | undefined {
+  const context = useContext(AppContext);
+  if (!context)
+    throw new Error("useAppState must be used within an AppStateProvider");
+  return context.state.error;
+}
+
+export function useServerCount(): number {
+  const context = useContext(AppContext);
+  if (!context)
+    throw new Error("useAppState must be used within an AppStateProvider");
+  return context.state.servers.size;
+}
+
+export function useSessionCount(): number {
+  const context = useContext(AppContext);
+  if (!context)
+    throw new Error("useAppState must be used within an AppStateProvider");
+  return context.state.sessions.size;
+}
+
+export function useActiveSessionCount(): number {
+  const activeSessions = useActiveSessions();
+  return activeSessions.length;
 }

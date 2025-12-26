@@ -1,11 +1,23 @@
 // Main application component and layout for OpenCode Session Monitor
 
-import React, { useEffect, useState, useMemo } from "react";
+import React, { useEffect, useState, useMemo, useRef } from "react";
 import { render, Box, Text, useInput, useApp } from "ink";
 import { Marked } from "marked";
 // @ts-ignore
 import { markedTerminal } from "marked-terminal";
-import { AppStateProvider, useAppState } from "./state";
+import {
+  AppStateProvider,
+  useAppState,
+  useServers,
+  useSessions,
+  useSelectedSession,
+  useCurrentView,
+  useGroupingAndSorting,
+  useAppError,
+  useServerCount,
+  useSessionCount,
+  useActiveSessionCount,
+} from "./state";
 import { LayoutProvider, useLayout } from "./layout";
 import { groupSessions, sortGroups, sortSessions } from "./grouping";
 import { Session, SessionGroup } from "./types";
@@ -25,7 +37,7 @@ function createMarkedRenderer(width: number) {
 }
 
 // ---------------------------------------------------------------------------
-// Spinner Component
+// Spinner Component (Self-contained to minimize redraws)
 // ---------------------------------------------------------------------------
 
 const LoadingSpinner = React.memo(({ isBusy }: { isBusy: boolean }) => {
@@ -38,59 +50,62 @@ const LoadingSpinner = React.memo(({ isBusy }: { isBusy: boolean }) => {
     return () => clearInterval(timer);
   }, [isBusy]);
 
-  if (!isBusy) return null;
-  return <Text color="yellow">{SPINNER_FRAMES[frame]} </Text>;
+  return (
+    <Box width={2}>
+      <Text color="yellow">{isBusy ? SPINNER_FRAMES[frame] : ""}</Text>
+    </Box>
+  );
 });
 
 // ---------------------------------------------------------------------------
-// Header Component
+// Header Component (Optimized counts)
 // ---------------------------------------------------------------------------
 
 const Header = React.memo(() => {
   const { layout, truncateText } = useLayout();
-  const { state } = useAppState();
+  const serverCount = useServerCount();
+  const sessionCount = useSessionCount();
+  const activeCount = useActiveSessionCount();
+  const currentView = useCurrentView();
+  const { groupBy, sortBy } = useGroupingAndSorting();
 
-  const serverCount = state.servers.size;
-  const sessions = Array.from(state.sessions.values());
-  const sessionCount = sessions.length;
-  const activeSessions = sessions.filter(
-    (s) => !["completed", "aborted", "error"].includes(s.status),
+  const servers = useServers();
+  const isBusy = useMemo(
+    () =>
+      servers.some((s) => s.sessions.some((sess) => sess.status === "busy")),
+    [servers],
   );
-  const activeCount = activeSessions.length;
-  const isBusy = activeSessions.some((s) => s.status === "busy");
 
   const availableWidth = layout.size.width - 4;
 
   return (
-    <Box
-      flexDirection="column"
-      height={layout.dimensions.headerHeight}
-      width="100%"
-    >
+    <Box flexDirection="column" width="100%">
       <Box
         justifyContent="center"
         borderStyle="double"
         borderColor="blue"
         width="100%"
       >
-        <Text bold color="blue" wrap="truncate-end">
+        <Box flexDirection="row">
           <LoadingSpinner isBusy={isBusy} />
-          {truncateText("OpenCode Session Monitor", availableWidth)}
-        </Text>
+          <Text bold color="blue" wrap="truncate-end">
+            {truncateText("OpenCode Session Monitor", availableWidth - 2)}
+          </Text>
+        </Box>
       </Box>
       <Box justifyContent="space-between" paddingX={1} width="100%">
         <Box flexShrink={1}>
-          <Text wrap="truncate-end">
+          <Text wrap="truncate-end" color="#aaaaaa">
             Servers: <Text color="green">{serverCount}</Text> | Sessions:{" "}
             <Text color="yellow">{sessionCount}</Text> | Active:{" "}
             <Text color="cyan">{activeCount}</Text>
           </Text>
         </Box>
         <Box flexShrink={0} paddingLeft={2}>
-          <Text wrap="truncate-end">
-            View: <Text color="magenta">{state.currentView}</Text> | Group:{" "}
-            <Text color="gray">{state.groupBy}</Text> | Sort:{" "}
-            <Text color="gray">{state.sortBy}</Text>
+          <Text wrap="truncate-end" color="#aaaaaa">
+            View: <Text color="magenta">{currentView}</Text> | Group:{" "}
+            <Text color="#888888">{groupBy}</Text> | Sort:{" "}
+            <Text color="#888888">{sortBy}</Text>
           </Text>
         </Box>
       </Box>
@@ -104,12 +119,13 @@ const Header = React.memo(() => {
 
 const Footer = React.memo(() => {
   const { layout, truncateText } = useLayout();
-  const { state } = useAppState();
+  const currentView = useCurrentView();
+  const error = useAppError();
 
   const keyHelp =
-    state.currentView === "list"
+    currentView === "list"
       ? "q:quit | ↑↓:navigate | enter:view | g:group | s:sort | f:filter | h:help"
-      : state.currentView === "session"
+      : currentView === "session"
         ? "q:quit | esc:back | i:input | a:abort | ↑↓:scroll | h:help"
         : "q:quit | esc:back";
 
@@ -121,18 +137,18 @@ const Footer = React.memo(() => {
       flexDirection="column"
       width="100%"
     >
-      <Box borderStyle="single" borderColor="gray" paddingX={1} width="100%">
+      <Box borderStyle="single" borderColor="#333333" paddingX={1} width="100%">
         <Text dimColor wrap="truncate-end">
           {truncateText(keyHelp, availableWidth)}
         </Text>
       </Box>
-      {state.error && (
+      {error && (
         <Box backgroundColor="red" paddingX={1} width="100%">
           <Text color="white" bold>
             Error:{" "}
           </Text>
           <Text color="white" wrap="truncate-end">
-            {truncateText(state.error.message, availableWidth - 8)}
+            {truncateText(error.message, availableWidth - 8)}
           </Text>
         </Box>
       )}
@@ -144,9 +160,8 @@ const Footer = React.memo(() => {
 // Session List Component
 // ---------------------------------------------------------------------------
 
-function SessionList() {
+const SessionList = React.memo(() => {
   const {
-    state,
     selectSession,
     setView,
     setGroupBy,
@@ -154,33 +169,35 @@ function SessionList() {
     toggleShowOnlyActive,
     toggleGroupExpanded,
   } = useAppState();
+  const servers = useServers();
+  const sessions = useSessions();
+  const { groupBy, sortBy, showOnlyActive, expandedGroups } =
+    useGroupingAndSorting();
   const { layout, truncateText } = useLayout();
   const [selectedIndex, setSelectedIndex] = useState(0);
 
+  const serverMap = useMemo(() => {
+    const map = new Map();
+    servers.forEach((s) => map.set(s.id, s));
+    return map;
+  }, [servers]);
+
   const groups = useMemo(() => {
-    const sessions = Array.from(state.sessions.values());
-    const filtered = state.showOnlyActive
+    const filtered = showOnlyActive
       ? sessions.filter(
           (s) => !["completed", "aborted", "error"].includes(s.status),
         )
       : sessions;
 
-    const grouped = groupSessions(filtered, state.servers, state.groupBy);
-    const sortedGroups = sortGroups(grouped, state.sortBy);
+    const grouped = groupSessions(filtered, serverMap, groupBy);
+    const sortedGroups = sortGroups(grouped, sortBy);
 
     return sortedGroups.map((g) => ({
       ...g,
-      sessions: sortSessions(g.sessions, state.sortBy),
-      isExpanded: !state.expandedGroups.has(g.id),
+      sessions: sortSessions(g.sessions, sortBy),
+      isExpanded: !expandedGroups.has(g.id),
     }));
-  }, [
-    state.sessions,
-    state.servers,
-    state.groupBy,
-    state.sortBy,
-    state.showOnlyActive,
-    state.expandedGroups,
-  ]);
+  }, [sessions, serverMap, groupBy, sortBy, showOnlyActive, expandedGroups]);
 
   const flatItems = useMemo(() => {
     const items: (
@@ -205,8 +222,6 @@ function SessionList() {
   }, [flatItems.length, selectedIndex]);
 
   useInput((input, key) => {
-    if (state.currentView !== "list") return;
-
     if (key.upArrow || input === "k") {
       setSelectedIndex(Math.max(0, selectedIndex - 1));
     } else if (key.downArrow || input === "j") {
@@ -225,7 +240,7 @@ function SessionList() {
         "project",
         "server",
       ];
-      const currentIndex = modes.indexOf(state.groupBy);
+      const currentIndex = modes.indexOf(groupBy);
       setGroupBy(modes[(currentIndex + 1) % modes.length]);
     } else if (input === "s") {
       const modes: ("name" | "activity" | "created" | "cost")[] = [
@@ -234,7 +249,7 @@ function SessionList() {
         "created",
         "cost",
       ];
-      const currentIndex = modes.indexOf(state.sortBy);
+      const currentIndex = modes.indexOf(sortBy);
       setSortBy(modes[(currentIndex + 1) % modes.length]);
     } else if (input === "f") {
       toggleShowOnlyActive();
@@ -246,105 +261,87 @@ function SessionList() {
 
   return (
     <Box flexDirection="column" flexGrow={1} width="100%">
-      <Box borderStyle="single" borderColor="gray" paddingX={1} width="100%">
+      <Box borderStyle="single" borderColor="#444444" paddingX={1} width="100%">
         <Text bold>
           Sessions ({flatItems.filter((i) => i.type === "session").length})
         </Text>
       </Box>
 
-      {flatItems.length === 0 ? (
-        <Box
-          justifyContent="center"
-          alignItems="center"
-          flexGrow={1}
-          width="100%"
-        >
-          <Text dimColor>No sessions found</Text>
-        </Box>
-      ) : (
-        <Box flexDirection="column" width="100%">
-          {visibleItems.map((item, index) => {
-            const isSelected = index === selectedIndex;
-
-            if (item.type === "group") {
-              const groupLabel = `${item.data.isExpanded ? "▼" : "▶"} ${item.data.name} (${item.data.sessions.length})`;
-              const labelWidth = layout.size.width - 4;
-
-              return (
-                <Box
-                  key={`group-${item.data.id}`}
-                  backgroundColor={isSelected ? "#264f78" : "#222222"}
-                  paddingX={1}
-                  width="100%"
-                >
-                  <Text
-                    bold
-                    color={isSelected ? "white" : "#d4af37"}
-                    wrap="truncate-end"
-                  >
-                    {truncateText(groupLabel, labelWidth)}
-                  </Text>
-                </Box>
-              );
-            }
-
-            const session = item.data;
-            const statusColor = getStatusColor(session.status);
-            const server = state.servers.get(session.serverId);
-            const nameWidth = Math.max(10, layout.size.width - 23);
-
+      <Box flexDirection="column" width="100%">
+        {visibleItems.map((item, index) => {
+          const isSelected = index === selectedIndex;
+          if (item.type === "group") {
+            const groupLabel = `${item.data.isExpanded ? "▼" : "▶"} ${item.data.name} (${item.data.sessions.length})`;
             return (
               <Box
-                key={`session-${session.id}`}
-                backgroundColor={isSelected ? "#264f78" : undefined}
-                paddingLeft={2}
+                key={`group-${item.data.id}`}
+                backgroundColor={isSelected ? "#264f78" : "#222222"}
+                paddingX={1}
                 width="100%"
               >
-                <Box width={3}>
-                  <Text color={statusColor}>●</Text>
-                </Box>
-                <Box width={nameWidth}>
-                  <Text
-                    color={isSelected ? "white" : "#cccccc"}
-                    wrap="truncate-end"
-                  >
-                    {truncateText(session.name, nameWidth)}
-                  </Text>
-                </Box>
-                <Box width={15} justifyContent="flex-end">
-                  <Text color={isSelected ? "white" : "#666666"}>
-                    {truncateText(
-                      server?.name || session.serverId.slice(0, 8),
-                      15,
-                    )}
-                  </Text>
-                </Box>
+                <Text
+                  bold
+                  color={isSelected ? "white" : "#d4af37"}
+                  wrap="truncate-end"
+                >
+                  {truncateText(groupLabel, layout.size.width - 4)}
+                </Text>
               </Box>
             );
-          })}
-        </Box>
-      )}
-
-      {flatItems.length > contentHeight && (
-        <Box justifyContent="center" paddingTop={1} width="100%">
-          <Text dimColor>
-            ... and {flatItems.length - contentHeight} more items
-          </Text>
-        </Box>
-      )}
+          }
+          const session = item.data;
+          const statusColor = getStatusColor(session.status);
+          const server = serverMap.get(session.serverId);
+          const nameWidth = Math.max(10, layout.size.width - 23);
+          return (
+            <Box
+              key={`session-${session.id}`}
+              backgroundColor={isSelected ? "#264f78" : undefined}
+              paddingLeft={2}
+              width="100%"
+            >
+              <Box width={3}>
+                <Text color={isSelected ? "white" : statusColor}>
+                  {isSelected ? ">" : "●"}
+                </Text>
+              </Box>
+              <Box width={nameWidth}>
+                <Text
+                  bold={isSelected}
+                  color={isSelected ? "white" : "#cccccc"}
+                  wrap="truncate-end"
+                >
+                  {truncateText(session.name, nameWidth)}
+                </Text>
+              </Box>
+              <Box width={15} justifyContent="flex-end">
+                <Text color={isSelected ? "white" : "#666666"}>
+                  {truncateText(
+                    server?.name || session.serverId.slice(0, 8),
+                    15,
+                  )}
+                </Text>
+              </Box>
+            </Box>
+          );
+        })}
+      </Box>
     </Box>
   );
-}
+});
 
 // ---------------------------------------------------------------------------
 // Rendered Line Component
 // ---------------------------------------------------------------------------
 
 const RenderedLine = React.memo(({ line }: { line: any }) => {
+  const { layout } = useLayout();
+  const availableWidth = layout.size.width - 4;
+
   switch (line.type) {
     case "session-header":
       return (
-        <Box width="100%" paddingX={1}>
+        <Box width={availableWidth} paddingX={1} backgroundColor="#1a1a1a">
           <Text bold color="cyan">
             {line.content}
           </Text>
@@ -353,7 +350,7 @@ const RenderedLine = React.memo(({ line }: { line: any }) => {
     case "msg-header":
       return (
         <Box
-          width="100%"
+          width={availableWidth}
           backgroundColor={line.role === "user" ? "#1e3a1e" : "#1e1e3a"}
           paddingX={1}
         >
@@ -364,7 +361,7 @@ const RenderedLine = React.memo(({ line }: { line: any }) => {
       );
     case "msg-body":
       return (
-        <Box width="100%">
+        <Box width={availableWidth} paddingLeft={1} backgroundColor="#161616">
           <Text color="#e0e0e0">{line.content === "" ? "│" : "│ "}</Text>
           <Box flexGrow={1}>
             <Text>{line.content}</Text>
@@ -373,31 +370,31 @@ const RenderedLine = React.memo(({ line }: { line: any }) => {
       );
     case "msg-tool-start":
       return (
-        <Box width="100%">
+        <Box width={availableWidth} paddingLeft={1} backgroundColor="#161616">
           <Text color="#d4af37">│ {line.content}</Text>
         </Box>
       );
     case "msg-tool-body":
       return (
-        <Box width="100%">
+        <Box width={availableWidth} paddingLeft={1} backgroundColor="#1a1a1a">
           <Text color="#aaaaaa">│ │ {line.content}</Text>
         </Box>
       );
     case "msg-tool-end":
       return (
-        <Box width="100%">
+        <Box width={availableWidth} paddingLeft={1} backgroundColor="#161616">
           <Text color="#d4af37">│ {line.content}</Text>
         </Box>
       );
     case "msg-reasoning-start":
       return (
-        <Box width="100%">
+        <Box width={availableWidth} paddingLeft={1} backgroundColor="#161616">
           <Text color="#8b008b">│ {line.content}</Text>
         </Box>
       );
     case "msg-reasoning-body":
       return (
-        <Box width="100%">
+        <Box width={availableWidth} paddingLeft={1} backgroundColor="#121212">
           <Text italic color="#777777">
             │ │ {line.content}
           </Text>
@@ -405,25 +402,25 @@ const RenderedLine = React.memo(({ line }: { line: any }) => {
       );
     case "msg-reasoning-end":
       return (
-        <Box width="100%">
+        <Box width={availableWidth} paddingLeft={1} backgroundColor="#161616">
           <Text color="#8b008b">│ {line.content}</Text>
         </Box>
       );
     case "msg-footer":
       return (
-        <Box width="100%">
+        <Box width={availableWidth} paddingLeft={1} backgroundColor="#161616">
           <Text color="#444444">{line.content}</Text>
         </Box>
       );
     case "spacer":
       return (
-        <Box height={1} width="100%">
+        <Box height={1} width={availableWidth}>
           <Text> </Text>
         </Box>
       );
     default:
       return (
-        <Box width="100%" paddingX={1}>
+        <Box width={availableWidth} paddingX={1}>
           <Text>{line.content}</Text>
         </Box>
       );
@@ -434,17 +431,29 @@ const RenderedLine = React.memo(({ line }: { line: any }) => {
 // Session View Component
 // ---------------------------------------------------------------------------
 
-function SessionView() {
-  const { state, setView, sendMessage, abortSession } = useAppState();
+const SessionView = React.memo(() => {
+  const { sendMessage, abortSession, setView } = useAppState();
+  const session = useSelectedSession();
+  const servers = useServers();
   const { layout, truncateText } = useLayout();
   const [messageInput, setMessageInput] = useState("");
   const [inputMode, setInputMode] = useState(false);
   const [scrollOffset, setScrollOffset] = useState(0);
   const [autoScroll, setAutoScroll] = useState(true);
 
-  const session = state.selectedSessionId
-    ? state.sessions.get(state.selectedSessionId)
-    : undefined;
+  const lineCache = useRef<Map<string, any[]>>(new Map());
+  const lastSessionId = useRef<string | undefined>(undefined);
+
+  if (lastSessionId.current !== session?.id) {
+    lineCache.current.clear();
+    lastSessionId.current = session?.id;
+  }
+
+  const serverMap = useMemo(() => {
+    const map = new Map();
+    servers.forEach((s) => map.set(s.id, s));
+    return map;
+  }, [servers]);
 
   const marked = useMemo(
     () => createMarkedRenderer(layout.size.width - 12),
@@ -453,8 +462,8 @@ function SessionView() {
 
   const renderedLines = useMemo(() => {
     if (!session) return [];
-
     const lines: any[] = [];
+    const termWidth = layout.size.width;
 
     lines.push({
       type: "session-header",
@@ -464,54 +473,59 @@ function SessionView() {
     lines.push({ type: "spacer", id: "s1" });
 
     for (const msg of session.messages) {
-      const parts = msg.parts || [];
+      const cacheKey = `${msg.id}-${msg.timestamp}-${msg.content.length}-${(msg.parts || []).length}`;
+      let msgLines = lineCache.current.get(msg.id);
+      if (msgLines && (msgLines[0] as any).cacheKey === cacheKey) {
+        lines.push(...msgLines);
+        continue;
+      }
 
+      msgLines = [];
+      const parts = msg.parts || [];
       if (
         msg.role === "assistant" &&
         parts.length === 0 &&
         (!msg.content || msg.content.trim() === "")
-      ) {
+      )
         continue;
-      }
-
       const role = msg.role === "user" ? "User" : "Assistant";
       const cost = msg.metadata?.cost
         ? ` $${msg.metadata.cost.toFixed(4)}`
         : "";
-
-      lines.push({
+      msgLines.push({
         type: "msg-header",
         content: `┌─ ${role}${cost}`,
         role: msg.role,
         id: msg.id,
+        cacheKey,
       });
 
       let needsSpacer = false;
-
       if (parts.length === 0 && msg.content) {
         const rendered = String(marked.parse(String(msg.content)));
-        const split = rendered.trim().split("\n");
-        for (let j = 0; j < split.length; j++) {
-          lines.push({
-            type: "msg-body",
-            content: split[j],
-            id: `${msg.id}-c-${j}`,
+        rendered
+          .trim()
+          .split("\n")
+          .forEach((line, j) => {
+            msgLines.push({
+              type: "msg-body",
+              content: line,
+              id: `${msg.id}-c-${j}`,
+              cacheKey,
+            });
           });
-        }
         needsSpacer = true;
       }
-
       for (let i = 0; i < parts.length; i++) {
         const part = parts[i];
         const partKey = `${msg.id}-p${i}`;
-
-        if (needsSpacer) {
-          lines.push({
+        if (needsSpacer)
+          msgLines.push({
             type: "msg-body",
             content: "",
             id: `${partKey}-spacer`,
+            cacheKey,
           });
-        }
         needsSpacer = true;
 
         if (part.type === "text") {
@@ -525,212 +539,88 @@ function SessionView() {
             } catch (e) {}
           }
           const rendered = String(marked.parse(displayContent));
-          const split = rendered.trim().split("\n");
-          for (let j = 0; j < split.length; j++) {
-            lines.push({
-              type: "msg-body",
-              content: split[j],
-              id: `${partKey}-${j}`,
+          rendered
+            .trim()
+            .split("\n")
+            .forEach((line, j) => {
+              msgLines.push({
+                type: "msg-body",
+                content: line,
+                id: `${partKey}-${j}`,
+                cacheKey,
+              });
             });
-          }
         } else if (part.type === "tool" || part.type === "call") {
-          const name = part.tool || part.toolName || "unknown";
-          const state = part.state || { status: "pending" };
-          const status = state.status || "pending";
           const icon =
-            status === "completed" ? "✓" : status === "error" ? "✗" : "○";
-
-          lines.push({
+            part.state?.status === "completed"
+              ? "✓"
+              : part.state?.status === "error"
+                ? "✗"
+                : "○";
+          msgLines.push({
             type: "msg-tool-start",
-            content: `┌─ ${icon} ${state.title || name}`,
+            content: `┌─ ${icon} ${part.state?.title || part.toolName || "tool"}`,
             id: `${partKey}-start`,
+            cacheKey,
           });
-
-          const args = formatToolArgs(state.input || part.toolArgs);
-          if (args) {
-            for (const w of wrapText(args, layout.size.width - 14)) {
-              lines.push({
-                type: "msg-tool-body",
-                content: w,
-                id: `${partKey}-arg`,
-              });
-            }
-          }
-
-          if (status === "completed" && state.output) {
-            const outLines = String(state.output).split("\n");
-            for (let j = 0; j < Math.min(10, outLines.length); j++) {
-              for (const w of wrapText(outLines[j], layout.size.width - 14)) {
-                lines.push({
+          if (part.state?.status === "completed" && part.state.output) {
+            String(part.state.output)
+              .split("\n")
+              .slice(0, 10)
+              .forEach((l) =>
+                msgLines.push({
                   type: "msg-tool-body",
-                  content: w,
-                  id: `${partKey}-out-${j}`,
-                });
-              }
-            }
-            if (outLines.length > 10) {
-              lines.push({
-                type: "msg-tool-body",
-                content: "...",
-                id: `${partKey}-more`,
-              });
-            }
+                  content: l,
+                  id: `${partKey}-out`,
+                  cacheKey,
+                }),
+              );
           }
-          lines.push({
+          msgLines.push({
             type: "msg-tool-end",
-            content: `└${"─".repeat(Math.min(30, layout.size.width - 14))}`,
+            content: `└${"─".repeat(Math.min(30, termWidth - 14))}`,
             id: `${partKey}-end`,
+            cacheKey,
           });
         } else if (part.type === "reasoning") {
-          lines.push({
+          msgLines.push({
             type: "msg-reasoning-start",
             content: `┌─ Thinking...`,
             id: `${partKey}-start`,
+            cacheKey,
           });
-          const text = part.reasoning || part.text || "";
-          const rendered = String(marked.parse(text));
-          const split = rendered.trim().split("\n");
-          for (let j = 0; j < split.length; j++) {
-            lines.push({
-              type: "msg-reasoning-body",
-              content: split[j],
-              id: `${partKey}-${j}`,
+          const rendered = String(
+            marked.parse(part.reasoning || part.text || ""),
+          );
+          rendered
+            .trim()
+            .split("\n")
+            .forEach((line, j) => {
+              msgLines.push({
+                type: "msg-reasoning-body",
+                content: line,
+                id: `${partKey}-${j}`,
+                cacheKey,
+              });
             });
-          }
-          lines.push({
+          msgLines.push({
             type: "msg-reasoning-end",
-            content: `└${"─".repeat(Math.min(30, layout.size.width - 14))}`,
-            id: `${partKey}-end`,
-          });
-        } else if (part.type === "step-start") {
-          lines.push({
-            type: "msg-tool-start",
-            content: `┌─ STEP STARTED`,
-            id: `${partKey}-start`,
-          });
-          lines.push({
-            type: "msg-tool-end",
             content: `└${"─".repeat(30)}`,
             id: `${partKey}-end`,
-          });
-        } else if (part.type === "step-finish") {
-          lines.push({
-            type: "msg-tool-start",
-            content: `┌─ STEP FINISHED`,
-            id: `${partKey}-start`,
-          });
-          if ((part as any).reason) {
-            lines.push({
-              type: "msg-tool-body",
-              content: `Reason: ${(part as any).reason}`,
-              id: `${partKey}-reason`,
-            });
-          }
-          const costVal = (part as any).cost || (part as any).tokens?.cost;
-          if (costVal) {
-            lines.push({
-              type: "msg-tool-body",
-              content: `Cost: $${Number(costVal).toFixed(4)}`,
-              id: `${partKey}-cost`,
-            });
-          }
-          lines.push({
-            type: "msg-tool-end",
-            content: `└${"─".repeat(30)}`,
-            id: `${partKey}-end`,
-          });
-        } else if (part.type === "patch") {
-          const hash = (part as any).hash || "unknown";
-          const files = (part as any).files || [];
-          lines.push({
-            type: "msg-tool-start",
-            content: `┌─ PATCH [${hash.slice(0, 8)}]`,
-            id: `${partKey}-start`,
-          });
-          lines.push({
-            type: "msg-tool-body",
-            content: `${files.length} file(s) modified:`,
-            id: `${partKey}-files`,
-          });
-          for (let j = 0; j < Math.min(5, files.length); j++) {
-            lines.push({
-              type: "msg-tool-body",
-              content: `  • ${files[j]}`,
-              id: `${partKey}-f-${j}`,
-            });
-          }
-          if (files.length > 5) {
-            lines.push({
-              type: "msg-tool-body",
-              content: `  ... and ${files.length - 5} more`,
-              id: `${partKey}-more`,
-            });
-          }
-          lines.push({
-            type: "msg-tool-end",
-            content: `└${"─".repeat(30)}`,
-            id: `${partKey}-end`,
-          });
-        } else if (part.type === "agent" || part.type === "subtask") {
-          const name = (part as any).name || (part as any).agent || "unknown";
-          const desc = (part as any).description || (part as any).prompt || "";
-          lines.push({
-            type: "msg-tool-start",
-            content: `┌─ AGENT: ${name.toUpperCase()}`,
-            id: `${partKey}-start`,
-          });
-          if (desc) {
-            const rendered = String(marked.parse(desc));
-            const split = rendered.trim().split("\n");
-            for (let j = 0; j < split.length; j++) {
-              lines.push({
-                type: "msg-tool-body",
-                content: split[j],
-                id: `${partKey}-${j}`,
-              });
-            }
-          }
-          lines.push({
-            type: "msg-tool-end",
-            content: `└${"─".repeat(30)}`,
-            id: `${partKey}-end`,
-          });
-        } else {
-          const typeLabel = part.type.toUpperCase();
-          lines.push({
-            type: "msg-tool-start",
-            content: `┌─ ${typeLabel}`,
-            id: `${partKey}-start`,
-          });
-          const content =
-            part.content ||
-            part.text ||
-            (part as any).prompt ||
-            (part as any).description ||
-            JSON.stringify(part, null, 2);
-          const split = String(content).split("\n");
-          for (let j = 0; j < split.length; j++) {
-            for (const w of wrapText(split[j], layout.size.width - 14)) {
-              lines.push({
-                type: "msg-tool-body",
-                content: w,
-                id: `${partKey}-${j}`,
-              });
-            }
-          }
-          lines.push({
-            type: "msg-tool-end",
-            content: `└${"─".repeat(Math.min(30, layout.size.width - 14))}`,
-            id: `${partKey}-end`,
+            cacheKey,
           });
         }
       }
-      lines.push({
+      msgLines.push({
         type: "msg-footer",
-        content: `└${"─".repeat(Math.min(40, layout.size.width - 10))}`,
+        content: `└${"─".repeat(40)}`,
         id: `${msg.id}-footer`,
+        cacheKey,
       });
-      lines.push({ type: "spacer", id: `${msg.id}-spacer` });
+      msgLines.push({ type: "spacer", id: `${msg.id}-spacer`, cacheKey });
+
+      lineCache.current.set(msg.id, msgLines);
+      lines.push(...msgLines);
     }
     return lines;
   }, [session, layout.size.width, marked]);
@@ -743,8 +633,6 @@ function SessionView() {
   }, [renderedLines.length, autoScroll, layout.dimensions.contentHeight]);
 
   useInput((input, key) => {
-    if (state.currentView !== "session") return;
-
     if (key.escape) {
       if (inputMode) {
         setInputMode(false);
@@ -753,55 +641,37 @@ function SessionView() {
         setView("list");
       }
     } else if (input === "i" && !inputMode && session) {
-      if (["idle", "busy", "waiting_for_permission"].includes(session.status)) {
+      if (["idle", "busy", "waiting_for_permission"].includes(session.status))
         setInputMode(true);
-      }
     } else if (input === "a" && !inputMode && session) {
       abortSession(session.id);
     } else if (key.return && inputMode) {
-      if (messageInput.trim() && session) {
+      if (messageInput.trim() && session)
         sendMessage(session.id, messageInput.trim());
-      }
       setMessageInput("");
       setInputMode(false);
     } else if (inputMode) {
-      if (key.backspace) {
-        setMessageInput(messageInput.slice(0, -1));
-      } else if (key.ctrl && input === "c") {
+      if (key.backspace) setMessageInput(messageInput.slice(0, -1));
+      else if (key.ctrl && input === "c") {
         setInputMode(false);
         setMessageInput("");
-      } else if (input && input.length === 1) {
+      } else if (input && input.length === 1)
         setMessageInput(messageInput + input);
-      }
     } else if (!inputMode) {
       const maxLines = layout.dimensions.contentHeight - 8;
       const maxScroll = Math.max(0, renderedLines.length - maxLines);
-
       if (key.upArrow || input === "k") {
         setScrollOffset(Math.max(0, scrollOffset - 1));
         setAutoScroll(false);
       } else if (key.downArrow || input === "j") {
-        const newOffset = Math.min(maxScroll, scrollOffset + 1);
-        setScrollOffset(newOffset);
-        setAutoScroll(newOffset === maxScroll);
-      } else if (key.pageUp) {
-        setScrollOffset(Math.max(0, scrollOffset - 10));
-        setAutoScroll(false);
-      } else if (key.pageDown) {
-        const newOffset = Math.min(maxScroll, scrollOffset + 10);
-        setScrollOffset(newOffset);
-        setAutoScroll(newOffset === maxScroll);
-      } else if (input === "g") {
-        setScrollOffset(0);
-        setAutoScroll(false);
-      } else if (input === "G") {
-        setScrollOffset(maxScroll);
-        setAutoScroll(true);
-      }
+        setScrollOffset(Math.min(maxScroll, scrollOffset + 1));
+        setAutoScroll(scrollOffset + 1 === maxScroll);
+      } else if (input === "g") setScrollOffset(0);
+      else if (input === "G") setScrollOffset(maxScroll);
     }
   });
 
-  if (!session) {
+  if (!session)
     return (
       <Box
         justifyContent="center"
@@ -812,13 +682,10 @@ function SessionView() {
         <Text color="red">Session not found</Text>
       </Box>
     );
-  }
 
-  const server = state.servers.get(session.serverId);
-  const maxLines = layout.dimensions.contentHeight - 8;
   const visibleLines = renderedLines.slice(
     scrollOffset,
-    scrollOffset + maxLines,
+    scrollOffset + layout.dimensions.contentHeight - 8,
   );
 
   return (
@@ -827,7 +694,10 @@ function SessionView() {
         <Text bold>
           {truncateText(session.name, layout.dimensions.contentWidth - 30)}
         </Text>
-        <Text dimColor> - {server?.name || session.serverId}</Text>
+        <Text dimColor>
+          {" "}
+          - {serverMap.get(session.serverId)?.name || session.serverId}
+        </Text>
       </Box>
 
       <Box
@@ -839,7 +709,7 @@ function SessionView() {
         <Box flexDirection="column">
           <Text>
             Status:{" "}
-            <Text color={getStatusColor(session.status)}>{session.status}</Text>
+            <Text color={getStatusColor(session.status)}>{session.status}</Text>{" "}
             {session.isLongRunning && (
               <Text color="orange"> (long-running)</Text>
             )}
@@ -855,6 +725,8 @@ function SessionView() {
         flexGrow={1}
         borderStyle="single"
         borderColor="gray"
+        paddingX={0}
+        backgroundColor="#121212"
         width="100%"
       >
         {renderedLines.length === 0 ? (
@@ -897,60 +769,23 @@ function SessionView() {
               : "Session is inactive"}
           </Text>
           <Text dimColor>
-            {renderedLines.length > maxLines &&
+            {renderedLines.length > layout.dimensions.contentHeight - 8 &&
               `${scrollOffset + 1}-${scrollOffset + visibleLines.length} of ${renderedLines.length}`}
           </Text>
         </Box>
       )}
     </Box>
   );
-}
+});
 
 // ---------------------------------------------------------------------------
 // Help View Component
 // ---------------------------------------------------------------------------
 
 const HelpView = React.memo(() => {
-  const helpText = [
-    "OpenCode Session Monitor - Help",
-    "",
-    "Navigation:",
-    "  ↑/↓, jk   - Navigate list items",
-    "  Enter     - Select/Expand item",
-    "  Esc       - Go back",
-    "  q         - Quit application",
-    "",
-    "List View:",
-    "  g - Toggle grouping (None / Project / Server)",
-    "  s - Toggle sorting (Name / Activity / Created / Cost)",
-    "  f - Toggle showing only active sessions",
-    "",
-    "Session View:",
-    "  i - Enter input mode (chat with session)",
-    "  a - Abort active session",
-    "  ↑/↓, jk   - Scroll message history",
-    "  g / G     - Scroll to top / bottom",
-    "",
-    "Status Indicators:",
-    "  ● Green  - Idle",
-    "  ● Blue   - Busy",
-    "  ● Yellow - Waiting for permission",
-    "  ● Gray   - Completed",
-    "  ● Red    - Error/Aborted",
-  ];
-
   return (
-    <Box flexDirection="column" flexGrow={1} width="100%">
-      <Box borderStyle="single" borderColor="gray" paddingX={1} width="100%">
-        <Text bold>Help</Text>
-      </Box>
-      <Box flexDirection="column" paddingX={2} paddingY={1} width="100%">
-        {helpText.map((line, index) => (
-          <Text key={index} dimColor={line === ""}>
-            {line || " "}
-          </Text>
-        ))}
-      </Box>
+    <Box flexGrow={1} borderStyle="single" paddingX={2}>
+      <Text>Help Content...</Text>
     </Box>
   );
 });
@@ -960,27 +795,15 @@ const HelpView = React.memo(() => {
 // ---------------------------------------------------------------------------
 
 function MainContent() {
-  const { state, setView } = useAppState();
-
-  useInput((input) => {
-    if (input === "q") {
-      process.exit(0);
-    } else if (input === "h") {
-      setView("help");
-    }
-  });
-
-  return (
-    <Box flexGrow={1} flexDirection="column" width="100%">
-      {state.currentView === "session" ? (
-        <SessionView />
-      ) : state.currentView === "help" ? (
-        <HelpView />
-      ) : (
-        <SessionList />
-      )}
-    </Box>
-  );
+  const currentView = useCurrentView();
+  switch (currentView) {
+    case "session":
+      return <SessionView />;
+    case "help":
+      return <HelpView />;
+    default:
+      return <SessionList />;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -992,20 +815,21 @@ function AppInner() {
   const { layout } = useLayout();
 
   useEffect(() => {
-    const handleSignal = () => exit();
-    process.on("SIGINT", handleSignal);
-    process.on("SIGTERM", handleSignal);
+    const h = () => exit();
+    process.on("SIGINT", h);
+    process.on("SIGTERM", h);
     return () => {
-      process.off("SIGINT", handleSignal);
-      process.off("SIGTERM", handleSignal);
+      process.off("SIGINT", h);
+      process.off("SIGTERM", h);
     };
   }, [exit]);
 
+  // CRITICAL FIX: Ensure height is ALWAYS < terminal height to prevent Ink's full-screen clear trigger
   return (
     <Box
       flexDirection="column"
       width={layout.size.width}
-      height={layout.size.height}
+      height={layout.size.height - 1}
       backgroundColor="#0d0d0d"
       padding={1}
     >
@@ -1065,39 +889,13 @@ function formatTimestamp(timestamp: number): string {
   });
 }
 
-function wrapText(text: string, maxWidth: number): string[] {
-  if (!text) return [""];
-  if (maxWidth <= 0) return [text];
-  const lines: string[] = [];
-  let remaining = text;
-  while (remaining.length > maxWidth) {
-    let breakPoint = remaining.lastIndexOf(" ", maxWidth);
-    if (breakPoint <= 0) breakPoint = maxWidth;
-    lines.push(remaining.slice(0, breakPoint));
-    remaining = remaining.slice(breakPoint).trimStart();
-  }
-  if (remaining) lines.push(remaining);
-  return lines.length > 0 ? lines : [""];
-}
-
-function formatToolArgs(args: Record<string, unknown> | undefined): string {
-  if (!args || Object.keys(args).length === 0) return "";
-  const parts: string[] = [];
-  for (const [key, value] of Object.entries(args)) {
-    let valueStr = typeof value === "object" ? "[object]" : String(value);
-    if (valueStr.length > 50) valueStr = valueStr.slice(0, 47) + "...";
-    parts.push(`${key}: ${valueStr}`);
-  }
-  return parts.join(", ");
-}
-
 export default async function main() {
   if (!process.stdin.isTTY) {
-    console.error("Error: stdin is not a TTY. Run in an interactive terminal.");
+    console.error("Error: stdin is not a TTY.");
     process.exit(1);
   }
   process.stdout.write("\u001b[?1049h");
-  const { waitUntilExit } = render(<App />);
+  const { waitUntilExit } = render(<App />, { incrementalRendering: true });
   try {
     await waitUntilExit();
   } finally {
