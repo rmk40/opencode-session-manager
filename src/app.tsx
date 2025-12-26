@@ -59,7 +59,6 @@ const Header = React.memo(() => {
   const activeCount = activeSessions.length;
   const isBusy = activeSessions.some((s) => s.status === "busy");
 
-  // Available width inside root border and padding
   const availableWidth = layout.size.width - 4;
 
   return (
@@ -158,7 +157,6 @@ function SessionList() {
   const { layout, truncateText } = useLayout();
   const [selectedIndex, setSelectedIndex] = useState(0);
 
-  // Memoize grouped and sorted sessions
   const groups = useMemo(() => {
     const sessions = Array.from(state.sessions.values());
     const filtered = state.showOnlyActive
@@ -184,7 +182,6 @@ function SessionList() {
     state.expandedGroups,
   ]);
 
-  // Flatten groups for navigation
   const flatItems = useMemo(() => {
     const items: (
       | { type: "group"; data: SessionGroup }
@@ -201,14 +198,12 @@ function SessionList() {
     return items;
   }, [groups]);
 
-  // Ensure selectedIndex is within bounds
   useEffect(() => {
     if (selectedIndex >= flatItems.length && flatItems.length > 0) {
       setSelectedIndex(flatItems.length - 1);
     }
   }, [flatItems.length, selectedIndex]);
 
-  // Handle keyboard input
   useInput((input, key) => {
     if (state.currentView !== "list") return;
 
@@ -273,7 +268,7 @@ function SessionList() {
 
             if (item.type === "group") {
               const groupLabel = `${item.data.isExpanded ? "▼" : "▶"} ${item.data.name} (${item.data.sessions.length})`;
-              const labelWidth = layout.size.width - 4; // root border + padding
+              const labelWidth = layout.size.width - 4;
 
               return (
                 <Box
@@ -296,8 +291,6 @@ function SessionList() {
             const session = item.data;
             const statusColor = getStatusColor(session.status);
             const server = state.servers.get(session.serverId);
-
-            // Calculate available width for name
             const nameWidth = Math.max(10, layout.size.width - 23);
 
             return (
@@ -344,6 +337,100 @@ function SessionList() {
 }
 
 // ---------------------------------------------------------------------------
+// Rendered Line Component
+// ---------------------------------------------------------------------------
+
+const RenderedLine = React.memo(({ line }: { line: any }) => {
+  switch (line.type) {
+    case "session-header":
+      return (
+        <Box width="100%" paddingX={1}>
+          <Text bold color="cyan">
+            {line.content}
+          </Text>
+        </Box>
+      );
+    case "msg-header":
+      return (
+        <Box
+          width="100%"
+          backgroundColor={line.role === "user" ? "#1e3a1e" : "#1e1e3a"}
+          paddingX={1}
+        >
+          <Text bold color="white">
+            {line.content}
+          </Text>
+        </Box>
+      );
+    case "msg-body":
+      return (
+        <Box width="100%">
+          <Text color="#e0e0e0">{line.content === "" ? "│" : "│ "}</Text>
+          <Box flexGrow={1}>
+            <Text>{line.content}</Text>
+          </Box>
+        </Box>
+      );
+    case "msg-tool-start":
+      return (
+        <Box width="100%">
+          <Text color="#d4af37">│ {line.content}</Text>
+        </Box>
+      );
+    case "msg-tool-body":
+      return (
+        <Box width="100%">
+          <Text color="#aaaaaa">│ │ {line.content}</Text>
+        </Box>
+      );
+    case "msg-tool-end":
+      return (
+        <Box width="100%">
+          <Text color="#d4af37">│ {line.content}</Text>
+        </Box>
+      );
+    case "msg-reasoning-start":
+      return (
+        <Box width="100%">
+          <Text color="#8b008b">│ {line.content}</Text>
+        </Box>
+      );
+    case "msg-reasoning-body":
+      return (
+        <Box width="100%">
+          <Text italic color="#777777">
+            │ │ {line.content}
+          </Text>
+        </Box>
+      );
+    case "msg-reasoning-end":
+      return (
+        <Box width="100%">
+          <Text color="#8b008b">│ {line.content}</Text>
+        </Box>
+      );
+    case "msg-footer":
+      return (
+        <Box width="100%">
+          <Text color="#444444">{line.content}</Text>
+        </Box>
+      );
+    case "spacer":
+      return (
+        <Box height={1} width="100%">
+          <Text> </Text>
+        </Box>
+      );
+    default:
+      return (
+        <Box width="100%" paddingX={1}>
+          <Text>{line.content}</Text>
+        </Box>
+      );
+  }
+});
+
+// ---------------------------------------------------------------------------
 // Session View Component
 // ---------------------------------------------------------------------------
 
@@ -359,19 +446,16 @@ function SessionView() {
     ? state.sessions.get(state.selectedSessionId)
     : undefined;
 
-  // Initialize marked once per width change
   const marked = useMemo(
     () => createMarkedRenderer(layout.size.width - 12),
     [layout.size.width],
   );
 
-  // Rendered lines for scrolling
   const renderedLines = useMemo(() => {
     if (!session) return [];
 
     const lines: any[] = [];
 
-    // Header line
     lines.push({
       type: "session-header",
       content: `Monitoring: ${session.name}`,
@@ -440,7 +524,6 @@ function SessionView() {
                 "```json\n" + JSON.stringify(obj, null, 2) + "\n```";
             } catch (e) {}
           }
-
           const rendered = String(marked.parse(displayContent));
           const split = rendered.trim().split("\n");
           for (let j = 0; j < split.length; j++) {
@@ -619,14 +702,12 @@ function SessionView() {
             content: `┌─ ${typeLabel}`,
             id: `${partKey}-start`,
           });
-
           const content =
             part.content ||
             part.text ||
             (part as any).prompt ||
             (part as any).description ||
             JSON.stringify(part, null, 2);
-
           const split = String(content).split("\n");
           for (let j = 0; j < split.length; j++) {
             for (const w of wrapText(split[j], layout.size.width - 14)) {
@@ -644,7 +725,6 @@ function SessionView() {
           });
         }
       }
-
       lines.push({
         type: "msg-footer",
         content: `└${"─".repeat(Math.min(40, layout.size.width - 10))}`,
@@ -652,11 +732,9 @@ function SessionView() {
       });
       lines.push({ type: "spacer", id: `${msg.id}-spacer` });
     }
-
     return lines;
   }, [session, layout.size.width, marked]);
 
-  // Auto-scroll to bottom
   useEffect(() => {
     if (autoScroll && renderedLines.length > 0) {
       const maxLines = layout.dimensions.contentHeight - 8;
@@ -664,7 +742,6 @@ function SessionView() {
     }
   }, [renderedLines.length, autoScroll, layout.dimensions.contentHeight]);
 
-  // Handle keyboard input
   useInput((input, key) => {
     if (state.currentView !== "session") return;
 
@@ -830,100 +907,6 @@ function SessionView() {
 }
 
 // ---------------------------------------------------------------------------
-// Rendered Line Component
-// ---------------------------------------------------------------------------
-
-const RenderedLine = React.memo(({ line }: { line: any }) => {
-  switch (line.type) {
-    case "session-header":
-      return (
-        <Box width="100%" paddingX={1}>
-          <Text bold color="cyan">
-            {line.content}
-          </Text>
-        </Box>
-      );
-    case "msg-header":
-      return (
-        <Box
-          width="100%"
-          backgroundColor={line.role === "user" ? "#1e3a1e" : "#1e1e3a"}
-          paddingX={1}
-        >
-          <Text bold color="white">
-            {line.content}
-          </Text>
-        </Box>
-      );
-    case "msg-body":
-      return (
-        <Box width="100%">
-          <Text color="#e0e0e0">{line.content === "" ? "│" : "│ "}</Text>
-          <Box flexGrow={1}>
-            <Text>{line.content}</Text>
-          </Box>
-        </Box>
-      );
-    case "msg-tool-start":
-      return (
-        <Box width="100%">
-          <Text color="#d4af37">│ {line.content}</Text>
-        </Box>
-      );
-    case "msg-tool-body":
-      return (
-        <Box width="100%">
-          <Text color="#aaaaaa">│ │ {line.content}</Text>
-        </Box>
-      );
-    case "msg-tool-end":
-      return (
-        <Box width="100%">
-          <Text color="#d4af37">│ {line.content}</Text>
-        </Box>
-      );
-    case "msg-reasoning-start":
-      return (
-        <Box width="100%">
-          <Text color="#8b008b">│ {line.content}</Text>
-        </Box>
-      );
-    case "msg-reasoning-body":
-      return (
-        <Box width="100%">
-          <Text italic color="#777777">
-            │ │ {line.content}
-          </Text>
-        </Box>
-      );
-    case "msg-reasoning-end":
-      return (
-        <Box width="100%">
-          <Text color="#8b008b">│ {line.content}</Text>
-        </Box>
-      );
-    case "msg-footer":
-      return (
-        <Box width="100%">
-          <Text color="#444444">{line.content}</Text>
-        </Box>
-      );
-    case "spacer":
-      return (
-        <Box height={1} width="100%">
-          <Text> </Text>
-        </Box>
-      );
-    default:
-      return (
-        <Box width="100%" paddingX={1}>
-          <Text>{line.content}</Text>
-        </Box>
-      );
-  }
-});
-
-// ---------------------------------------------------------------------------
 // Help View Component
 // ---------------------------------------------------------------------------
 
@@ -1008,7 +991,6 @@ function AppInner() {
   const { exit } = useApp();
   const { layout } = useLayout();
 
-  // Handle process signals
   useEffect(() => {
     const handleSignal = () => exit();
     process.on("SIGINT", handleSignal);
@@ -1070,10 +1052,8 @@ function formatTimestamp(timestamp: number): string {
   const date = new Date(timestamp);
   const now = new Date();
   const diffMs = now.getTime() - timestamp;
-
   if (diffMs < 60000) return `${Math.floor(diffMs / 1000)}s ago`;
   if (diffMs < 3600000) return `${Math.floor(diffMs / 60000)}m ago`;
-
   if (date.toDateString() === now.toDateString()) {
     return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
   }
@@ -1088,17 +1068,14 @@ function formatTimestamp(timestamp: number): string {
 function wrapText(text: string, maxWidth: number): string[] {
   if (!text) return [""];
   if (maxWidth <= 0) return [text];
-
   const lines: string[] = [];
   let remaining = text;
-
   while (remaining.length > maxWidth) {
     let breakPoint = remaining.lastIndexOf(" ", maxWidth);
     if (breakPoint <= 0) breakPoint = maxWidth;
     lines.push(remaining.slice(0, breakPoint));
     remaining = remaining.slice(breakPoint).trimStart();
   }
-
   if (remaining) lines.push(remaining);
   return lines.length > 0 ? lines : [""];
 }
@@ -1119,16 +1096,11 @@ export default async function main() {
     console.error("Error: stdin is not a TTY. Run in an interactive terminal.");
     process.exit(1);
   }
-
-  // Enter alternate screen buffer
   process.stdout.write("\u001b[?1049h");
-
   const { waitUntilExit } = render(<App />);
-
   try {
     await waitUntilExit();
   } finally {
-    // Exit alternate screen buffer
     process.stdout.write("\u001b[?1049l");
   }
 }

@@ -9,8 +9,8 @@ import { join } from "node:path";
 
 /**
  * Fundamental TUI Protection:
- * Redirect all stdout/stderr before any other modules are loaded.
- * This ensures background logs from SDK or dependencies never corrupt Ink's buffer.
+ * Redirect console methods to a log file.
+ * Low-level stdout is NOT patched to avoid interfering with Ink's native stream.
  */
 function bootstrapTUI() {
   const isTUI =
@@ -29,29 +29,17 @@ function bootstrapTUI() {
     logStream.write(`[${new Date().toISOString()}] ${formatted}`);
   };
 
-  const originalStdoutWrite = process.stdout.write.bind(process.stdout);
-
-  // Patch console
+  // Patch console globally
   console.log = logToFile;
   console.error = logToFile;
   console.warn = logToFile;
   console.debug = logToFile;
 
-  // Patch low-level write
-  process.stdout.write = ((chunk: any, encoding: any, callback: any) => {
-    const data = chunk.toString();
-    // Only allow Ink's ANSI sequences through
-    if (data.includes("\u001b") || data.includes("\x1b")) {
-      return originalStdoutWrite(chunk, encoding, callback);
-    }
-    logStream.write(`[${new Date().toISOString()}] [RAW-STDOUT] ${data}`);
-    if (callback) callback();
-    return true;
-  }) as any;
-
+  // Redirect stderr to the log file as it's almost always background noise in TUI mode
   process.stderr.write = ((chunk: any, _encoding: any, callback: any) => {
-    const data = chunk.toString();
-    logStream.write(`[${new Date().toISOString()}] [RAW-STDERR] ${data}`);
+    logStream.write(
+      `[${new Date().toISOString()}] [RAW-STDERR] ${chunk.toString()}`,
+    );
     if (callback) callback();
     return true;
   }) as any;
