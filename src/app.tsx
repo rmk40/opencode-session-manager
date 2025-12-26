@@ -63,14 +63,23 @@ const Header = React.memo(() => {
   const availableWidth = layout.size.width - 4;
 
   return (
-    <Box flexDirection="column" height={layout.dimensions.headerHeight}>
-      <Box justifyContent="center" borderStyle="double" borderColor="blue">
+    <Box
+      flexDirection="column"
+      height={layout.dimensions.headerHeight}
+      width="100%"
+    >
+      <Box
+        justifyContent="center"
+        borderStyle="double"
+        borderColor="blue"
+        width="100%"
+      >
         <Text bold color="blue" wrap="truncate-end">
           <LoadingSpinner isBusy={isBusy} />
           {truncateText("OpenCode Session Monitor", availableWidth)}
         </Text>
       </Box>
-      <Box justifyContent="space-between" paddingX={1}>
+      <Box justifyContent="space-between" paddingX={1} width="100%">
         <Box flexShrink={1}>
           <Text wrap="truncate-end">
             Servers: <Text color="green">{serverCount}</Text> | Sessions:{" "}
@@ -108,14 +117,18 @@ const Footer = React.memo(() => {
   const availableWidth = layout.size.width - 4;
 
   return (
-    <Box height={layout.dimensions.footerHeight} flexDirection="column">
-      <Box borderStyle="single" borderColor="gray" paddingX={1}>
+    <Box
+      height={layout.dimensions.footerHeight}
+      flexDirection="column"
+      width="100%"
+    >
+      <Box borderStyle="single" borderColor="gray" paddingX={1} width="100%">
         <Text dimColor wrap="truncate-end">
           {truncateText(keyHelp, availableWidth)}
         </Text>
       </Box>
       {state.error && (
-        <Box backgroundColor="red" paddingX={1}>
+        <Box backgroundColor="red" paddingX={1} width="100%">
           <Text color="white" bold>
             Error:{" "}
           </Text>
@@ -237,19 +250,24 @@ function SessionList() {
   const visibleItems = flatItems.slice(0, contentHeight);
 
   return (
-    <Box flexDirection="column" flexGrow={1}>
-      <Box borderStyle="single" borderColor="gray" paddingX={1}>
+    <Box flexDirection="column" flexGrow={1} width="100%">
+      <Box borderStyle="single" borderColor="gray" paddingX={1} width="100%">
         <Text bold>
           Sessions ({flatItems.filter((i) => i.type === "session").length})
         </Text>
       </Box>
 
       {flatItems.length === 0 ? (
-        <Box justifyContent="center" alignItems="center" flexGrow={1}>
+        <Box
+          justifyContent="center"
+          alignItems="center"
+          flexGrow={1}
+          width="100%"
+        >
           <Text dimColor>No sessions found</Text>
         </Box>
       ) : (
-        <Box flexDirection="column">
+        <Box flexDirection="column" width="100%">
           {visibleItems.map((item, index) => {
             const isSelected = index === selectedIndex;
 
@@ -262,6 +280,7 @@ function SessionList() {
                   key={`group-${item.data.id}`}
                   backgroundColor={isSelected ? "#264f78" : "#222222"}
                   paddingX={1}
+                  width="100%"
                 >
                   <Text
                     bold
@@ -286,6 +305,7 @@ function SessionList() {
                 key={`session-${session.id}`}
                 backgroundColor={isSelected ? "#264f78" : undefined}
                 paddingLeft={2}
+                width="100%"
               >
                 <Box width={3}>
                   <Text color={statusColor}>●</Text>
@@ -313,7 +333,7 @@ function SessionList() {
       )}
 
       {flatItems.length > contentHeight && (
-        <Box justifyContent="center" paddingTop={1}>
+        <Box justifyContent="center" paddingTop={1} width="100%">
           <Text dimColor>
             ... and {flatItems.length - contentHeight} more items
           </Text>
@@ -706,7 +726,12 @@ function SessionView() {
 
   if (!session) {
     return (
-      <Box justifyContent="center" alignItems="center" flexGrow={1}>
+      <Box
+        justifyContent="center"
+        alignItems="center"
+        flexGrow={1}
+        width="100%"
+      >
         <Text color="red">Session not found</Text>
       </Box>
     );
@@ -720,15 +745,20 @@ function SessionView() {
   );
 
   return (
-    <Box flexDirection="column" flexGrow={1} paddingX={1}>
-      <Box borderStyle="single" borderColor="gray" paddingX={1}>
+    <Box flexDirection="column" flexGrow={1} paddingX={1} width="100%">
+      <Box borderStyle="single" borderColor="gray" paddingX={1} width="100%">
         <Text bold>
           {truncateText(session.name, layout.dimensions.contentWidth - 30)}
         </Text>
         <Text dimColor> - {server?.name || session.serverId}</Text>
       </Box>
 
-      <Box paddingX={1} flexDirection="row" justifyContent="space-between">
+      <Box
+        paddingX={1}
+        flexDirection="row"
+        justifyContent="space-between"
+        width="100%"
+      >
         <Box flexDirection="column">
           <Text>
             Status:{" "}
@@ -749,13 +779,19 @@ function SessionView() {
         borderStyle="single"
         borderColor="gray"
         backgroundColor="#121212"
+        width="100%"
       >
         {renderedLines.length === 0 ? (
-          <Box justifyContent="center" alignItems="center" flexGrow={1}>
+          <Box
+            justifyContent="center"
+            alignItems="center"
+            flexGrow={1}
+            width="100%"
+          >
             <Text dimColor>No activity recorded</Text>
           </Box>
         ) : (
-          <Box flexDirection="column" flexGrow={1}>
+          <Box flexDirection="column" flexGrow={1} width="100%">
             {visibleLines.map((line, idx) => (
               <RenderedLine
                 key={`${line.id}-${scrollOffset + idx}`}
@@ -767,13 +803,18 @@ function SessionView() {
       </Box>
 
       {inputMode ? (
-        <Box borderStyle="single" borderColor="yellow" paddingX={1}>
+        <Box
+          borderStyle="single"
+          borderColor="yellow"
+          paddingX={1}
+          width="100%"
+        >
           <Text color="yellow">Message: </Text>
           <Text>{messageInput}</Text>
           <Text color="yellow">█</Text>
         </Box>
       ) : (
-        <Box paddingX={1} justifyContent="space-between">
+        <Box paddingX={1} justifyContent="space-between" width="100%">
           <Text dimColor>
             {["idle", "busy", "waiting_for_permission"].includes(session.status)
               ? 'Press "i" to chat, "a" to abort'
@@ -794,13 +835,10 @@ function SessionView() {
 // ---------------------------------------------------------------------------
 
 const RenderedLine = React.memo(({ line }: { line: any }) => {
-  const { layout } = useLayout();
-  const availableWidth = layout.size.width - 6;
-
   switch (line.type) {
     case "session-header":
       return (
-        <Box width={availableWidth} paddingX={1} backgroundColor="#1a1a1a">
+        <Box width="100%" paddingX={1} backgroundColor="#1a1a1a">
           <Text bold color="cyan">
             {line.content}
           </Text>
@@ -809,7 +847,7 @@ const RenderedLine = React.memo(({ line }: { line: any }) => {
     case "msg-header":
       return (
         <Box
-          width={availableWidth}
+          width="100%"
           backgroundColor={line.role === "user" ? "#1e3a1e" : "#1e1e3a"}
           paddingX={1}
         >
@@ -820,7 +858,7 @@ const RenderedLine = React.memo(({ line }: { line: any }) => {
       );
     case "msg-body":
       return (
-        <Box width={availableWidth} backgroundColor="#161616">
+        <Box width="100%" backgroundColor="#161616">
           <Text color="#e0e0e0">{line.content === "" ? "│" : "│ "}</Text>
           <Box flexGrow={1}>
             <Text>{line.content}</Text>
@@ -829,31 +867,31 @@ const RenderedLine = React.memo(({ line }: { line: any }) => {
       );
     case "msg-tool-start":
       return (
-        <Box width={availableWidth} backgroundColor="#161616">
+        <Box width="100%" backgroundColor="#161616">
           <Text color="#d4af37">│ {line.content}</Text>
         </Box>
       );
     case "msg-tool-body":
       return (
-        <Box width={availableWidth} backgroundColor="#1a1a1a">
+        <Box width="100%" backgroundColor="#1a1a1a">
           <Text color="#aaaaaa">│ │ {line.content}</Text>
         </Box>
       );
     case "msg-tool-end":
       return (
-        <Box width={availableWidth} backgroundColor="#161616">
+        <Box width="100%" backgroundColor="#161616">
           <Text color="#d4af37">│ {line.content}</Text>
         </Box>
       );
     case "msg-reasoning-start":
       return (
-        <Box width={availableWidth} backgroundColor="#161616">
+        <Box width="100%" backgroundColor="#161616">
           <Text color="#8b008b">│ {line.content}</Text>
         </Box>
       );
     case "msg-reasoning-body":
       return (
-        <Box width={availableWidth} backgroundColor="#121212">
+        <Box width="100%" backgroundColor="#121212">
           <Text italic color="#777777">
             │ │ {line.content}
           </Text>
@@ -861,25 +899,25 @@ const RenderedLine = React.memo(({ line }: { line: any }) => {
       );
     case "msg-reasoning-end":
       return (
-        <Box width={availableWidth} backgroundColor="#161616">
+        <Box width="100%" backgroundColor="#161616">
           <Text color="#8b008b">│ {line.content}</Text>
         </Box>
       );
     case "msg-footer":
       return (
-        <Box width={availableWidth} backgroundColor="#161616">
+        <Box width="100%" backgroundColor="#161616">
           <Text color="#444444">{line.content}</Text>
         </Box>
       );
     case "spacer":
       return (
-        <Box height={1}>
+        <Box height={1} width="100%">
           <Text> </Text>
         </Box>
       );
     default:
       return (
-        <Box width={availableWidth} paddingX={1}>
+        <Box width="100%" paddingX={1}>
           <Text>{line.content}</Text>
         </Box>
       );
@@ -920,11 +958,11 @@ const HelpView = React.memo(() => {
   ];
 
   return (
-    <Box flexDirection="column" flexGrow={1}>
-      <Box borderStyle="single" borderColor="gray" paddingX={1}>
+    <Box flexDirection="column" flexGrow={1} width="100%">
+      <Box borderStyle="single" borderColor="gray" paddingX={1} width="100%">
         <Text bold>Help</Text>
       </Box>
-      <Box flexDirection="column" paddingX={2} paddingY={1}>
+      <Box flexDirection="column" paddingX={2} paddingY={1} width="100%">
         {helpText.map((line, index) => (
           <Text key={index} dimColor={line === ""}>
             {line || " "}
@@ -951,7 +989,7 @@ function MainContent() {
   });
 
   return (
-    <Box flexGrow={1} flexDirection="column">
+    <Box flexGrow={1} flexDirection="column" width="100%">
       {state.currentView === "session" ? (
         <SessionView />
       ) : state.currentView === "help" ? (

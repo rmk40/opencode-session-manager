@@ -7,7 +7,7 @@ import {
   useEffect,
   ReactNode,
 } from "react";
-// import { useStdout } from "ink";
+import { useStdout } from "ink";
 
 // ---------------------------------------------------------------------------
 // Layout Types
@@ -82,9 +82,10 @@ function calculateDimensions(
   const headerHeight = 3;
   const footerHeight = 2;
 
-  // Inside the root border (1 on each side)
-  const innerWidth = Math.max(0, width - 2);
-  const innerHeight = Math.max(0, height - 2);
+  // Inside the root padding (1 on each side)
+  // We subtract 2 for padding and 2 for border safety
+  const innerWidth = Math.max(0, width - 4);
+  const innerHeight = Math.max(0, height - 4);
 
   // Sidebar width (not used in current TUI views, but keep for future)
   const sidebarWidth =
@@ -153,7 +154,6 @@ function calculateResponsiveLayout(
 
 interface LayoutContextType {
   layout: ResponsiveLayout;
-  updateSize: (size: TerminalSize) => void;
   // Helper functions
   getColumnWidth: (columns: number, spacing?: number) => number;
   getRowHeight: (rows: number, spacing?: number) => number;
@@ -176,50 +176,42 @@ export function LayoutProvider({
   children,
   breakpoints = DEFAULT_BREAKPOINTS,
 }: LayoutProviderProps) {
+  const { stdout } = useStdout();
+
+  // Use Ink's native stdout stream to stay in perfect sync
   const [layout, setLayout] = useState<ResponsiveLayout>(() =>
     calculateResponsiveLayout(
       {
-        width: process.stdout.columns || 80,
-        height: process.stdout.rows || 24,
+        width: stdout?.columns || 80,
+        height: stdout?.rows || 24,
       },
       breakpoints,
     ),
   );
 
-  // Update layout when terminal size changes
-  const updateSize = (size: TerminalSize) => {
-    const newLayout = calculateResponsiveLayout(size, breakpoints);
-    setLayout(newLayout);
-  };
-
-  // Listen for terminal resize events
+  // Sync layout whenever Ink detects a resize
   useEffect(() => {
-    let resizeTimer: NodeJS.Timeout | null = null;
+    if (stdout) {
+      const handleResize = () => {
+        setLayout(
+          calculateResponsiveLayout(
+            {
+              width: stdout.columns || 80,
+              height: stdout.rows || 24,
+            },
+            breakpoints,
+          ),
+        );
+      };
 
-    const handleResize = () => {
-      if (resizeTimer) clearTimeout(resizeTimer);
+      stdout.on("resize", handleResize);
+      handleResize(); // Initial sync
 
-      resizeTimer = setTimeout(() => {
-        updateSize({
-          width: process.stdout.columns || 80,
-          height: process.stdout.rows || 24,
-        });
-      }, 100); // 100ms debounce
-    };
-
-    process.stdout.on("resize", handleResize);
-
-    // Initial size update
-    updateSize({
-      width: process.stdout.columns || 80,
-      height: process.stdout.rows || 24,
-    });
-
-    return () => {
-      process.stdout.off("resize", handleResize);
-      if (resizeTimer) clearTimeout(resizeTimer);
-    };
-  }, []);
+      return () => {
+        stdout.off("resize", handleResize);
+      };
+    }
+  }, [stdout, breakpoints]);
 
   // Helper functions
   const getColumnWidth = (columns: number, spacing: number = 1): number => {
@@ -237,7 +229,6 @@ export function LayoutProvider({
   const fitText = (text: string, maxWidth: number): string => {
     if (text.length <= maxWidth) return text;
 
-    // Try to break at word boundaries
     const words = text.split(" ");
     let result = "";
 
@@ -255,15 +246,12 @@ export function LayoutProvider({
 
   const truncateText = (text: string, maxLength: number): string => {
     if (text.length <= maxLength) return text;
-
     if (maxLength <= 3) return text.slice(0, maxLength);
-
     return text.slice(0, maxLength - 3) + "...";
   };
 
   const contextValue: LayoutContextType = {
     layout,
-    updateSize,
     getColumnWidth,
     getRowHeight,
     fitText,
