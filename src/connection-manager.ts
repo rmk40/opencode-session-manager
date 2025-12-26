@@ -596,7 +596,74 @@ export class ConnectionManager extends EventEmitter {
   }
 
   /**
-   * Handle server shutdown from UDP
+   * Resolve a permission request
+   */
+  async resolvePermission(
+    sessionId: string,
+    permissionId: string,
+    response: "once" | "always" | "reject",
+  ): AsyncResult<void> {
+    const session = this.sessions.get(sessionId);
+    if (!session) {
+      return {
+        success: false,
+        error: {
+          code: "SESSION_NOT_FOUND",
+          message: `Session ${sessionId} not found`,
+          timestamp: Date.now(),
+          recoverable: false,
+        },
+      };
+    }
+
+    try {
+      const client = await httpClientPool.getClient(session.serverUrl);
+      if (!client) {
+        return {
+          success: false,
+          error: {
+            code: "SDK_NOT_AVAILABLE",
+            message: "OpenCode SDK not available",
+            timestamp: Date.now(),
+            recoverable: true,
+          },
+        };
+      }
+
+      const result = await client.resolvePermission(
+        sessionId,
+        permissionId,
+        response,
+      );
+
+      if (result.success) {
+        // Refresh session to get updated state
+        await this.refreshServer(session.serverId);
+        return { success: true };
+      }
+
+      return {
+        success: false,
+        error: result.error,
+      };
+    } catch (error) {
+      return {
+        success: false,
+        error: {
+          code: "NETWORK_ERROR",
+          message:
+            error instanceof Error
+              ? error.message
+              : "Failed to resolve permission",
+          timestamp: Date.now(),
+          recoverable: true,
+        },
+      };
+    }
+  }
+
+  /**
+   * Test server health using SDK
    */
   private async handleServerShutdown(packet: ShutdownPacket): Promise<void> {
     const server = this.servers.get(packet.serverId);

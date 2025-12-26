@@ -134,8 +134,12 @@ const LoadingSpinner = React.memo(({ isBusy }: { isBusy: boolean }) => {
     return () => clearInterval(timer);
   }, [isBusy]);
 
-  if (!isBusy) return null;
-  return <Text color="yellow">{SPINNER_FRAMES[frame]} </Text>;
+  if (!isBusy) return <Box width={2} />;
+  return (
+    <Box width={2}>
+      <Text color="yellow">{SPINNER_FRAMES[frame]}</Text>
+    </Box>
+  );
 });
 
 // ---------------------------------------------------------------------------
@@ -167,10 +171,12 @@ const Header = React.memo(() => {
         borderColor="blue"
         width="100%"
       >
-        <Text bold color="blue" wrap="truncate-end">
+        <Box flexDirection="row">
           <LoadingSpinner isBusy={isBusy} />
-          {truncateText("OpenCode Session Monitor", availableWidth)}
-        </Text>
+          <Text bold color="blue" wrap="truncate-end">
+            {truncateText("OpenCode Session Monitor", availableWidth - 2)}
+          </Text>
+        </Box>
       </Box>
       <Box justifyContent="space-between" paddingX={1} width="100%">
         <Box flexShrink={1}>
@@ -205,7 +211,7 @@ const Footer = React.memo(() => {
     currentView === "list"
       ? "q:quit | ↑↓:navigate | enter:view | g:group | s:sort | f:filter | h:help"
       : currentView === "session"
-        ? "q:quit | esc:back | i:input | a:abort | ↑↓:scroll | h:help"
+        ? "q:quit | esc:back | i:input | a:abort | y:allow once | Y:allow always | n:deny | h:help"
         : "q:quit | esc:back";
 
   const availableWidth = layout.size.width - 4;
@@ -565,7 +571,8 @@ const RenderedLine = React.memo(({ line }: { line: any }) => {
 // ---------------------------------------------------------------------------
 
 const SessionView = React.memo(() => {
-  const { sendMessage, abortSession, setView } = useAppState();
+  const { sendMessage, abortSession, setView, resolvePermission } =
+    useAppState();
   const session = useSelectedSession();
   const servers = useServers();
   const { layout, truncateText } = useLayout();
@@ -579,6 +586,9 @@ const SessionView = React.memo(() => {
   const inputRef = useRef("");
   const modeRef = useRef(false);
   const sessionRef = useRef<Session | undefined>(undefined);
+  const pendingPermissionRef = useRef<{ id: string; tool: string } | undefined>(
+    undefined,
+  );
 
   // Sync refs to avoid stale closures in useInput
   useEffect(() => {
@@ -695,7 +705,7 @@ const SessionView = React.memo(() => {
             } catch (e) {}
           }
           const rendered = parseMarkdownSync(marked, displayContent);
-          const split = rendered.trim().split("\n");
+          const split = rendered.split("\n");
           for (let j = 0; j < split.length; j++) {
             msgLines.push({
               type: "msg-body",
@@ -745,6 +755,29 @@ const SessionView = React.memo(() => {
                 ),
               );
           }
+          msgLines.push({
+            type: "msg-tool-end",
+            content: `└${"─".repeat(Math.min(30, termWidth - 14))}`,
+            id: `${partKey}-end`,
+            cacheKey,
+          });
+        } else if (part.type === "permission") {
+          msgLines.push({
+            type: "msg-tool-start",
+            content: `┌─ ⚠ PERMISSION REQUIRED: ${part.toolName || "tool"}`,
+            id: `${partKey}-start`,
+            cacheKey,
+          });
+          const text = part.content || part.text || "";
+          const rendered = parseMarkdownSync(marked, text);
+          rendered.split("\n").forEach((line, j) => {
+            msgLines.push({
+              type: "msg-body",
+              content: line,
+              id: `${partKey}-${j}`,
+              cacheKey,
+            });
+          });
           msgLines.push({
             type: "msg-tool-end",
             content: `└${"─".repeat(Math.min(30, termWidth - 14))}`,
@@ -803,6 +836,30 @@ const SessionView = React.memo(() => {
     }
   }, [renderedLines.length, autoScroll, layout.dimensions.contentHeight]);
 
+  // Find latest pending permission
+  const pendingPermission = useMemo(() => {
+    if (!session) return undefined;
+
+    // Scan messages backwards for the latest permission part
+    for (let i = session.messages.length - 1; i >= 0; i--) {
+      const msg = session.messages[i];
+      const part = (msg.parts || []).find((p) => p.type === "permission");
+      if (part && part.permissionID) {
+        if (session.status === "waiting_for_permission") {
+          return {
+            id: part.permissionID,
+            tool: part.toolName || "tool",
+          };
+        }
+      }
+    }
+    return undefined;
+  }, [session]);
+
+  useEffect(() => {
+    pendingPermissionRef.current = pendingPermission;
+  }, [pendingPermission]);
+
   // Handle keyboard input
   useInput((input, key) => {
     if (key.escape) {
@@ -844,8 +901,33 @@ const SessionView = React.memo(() => {
         setMessageInput((prev) => prev + input);
       }
     } else if (!modeRef.current) {
-      const maxLines = layout.dimensions.contentHeight - 8;
-      const maxScroll = Math.max(0, renderedLines.length - maxLines);
+      if (pendingPermissionRef.current) {
+        if (input === "y") {
+          resolvePermission(
+            sessionRef.current!.id,
+            pendingPermissionRef.current.id,
+            "once",
+          );
+          return;
+        } else if (input === "Y") {
+          resolvePermission(
+            sessionRef.current!.id,
+            pendingPermissionRef.current.id,
+            "always",
+          );
+          return;
+        } else if (input === "n") {
+          resolvePermission(
+            sessionRef.current!.id,
+            pendingPermissionRef.current.id,
+            "reject",
+          );
+          return;
+        }
+      }
+
+      const maxLinesCount = layout.dimensions.contentHeight - 8;
+      const maxScroll = Math.max(0, renderedLines.length - maxLinesCount);
 
       if (key.upArrow || input === "k") {
         setScrollOffset(Math.max(0, scrollOffset - 1));
@@ -885,10 +967,10 @@ const SessionView = React.memo(() => {
   }
 
   const server = serverMap.get(session.serverId);
-  const maxLines = layout.dimensions.contentHeight - 8;
+  const maxLinesCount = layout.dimensions.contentHeight - 8;
   const visibleLines = renderedLines.slice(
     scrollOffset,
-    scrollOffset + maxLines,
+    scrollOffset + maxLinesCount,
   );
 
   return (
@@ -966,6 +1048,34 @@ const SessionView = React.memo(() => {
           <Text>{messageInput}</Text>
           <Text color="yellow">█</Text>
         </Box>
+      ) : pendingPermission ? (
+        <Box
+          borderStyle="round"
+          borderColor="red"
+          paddingX={1}
+          width="100%"
+          marginTop={1}
+          flexDirection="column"
+        >
+          <Text bold color="red">
+            Permission required for {pendingPermission.tool}:
+          </Text>
+          <Text>
+            Press{" "}
+            <Text bold color="green">
+              y
+            </Text>{" "}
+            to allow once,{" "}
+            <Text bold color="green">
+              Y
+            </Text>{" "}
+            to allow always,{" "}
+            <Text bold color="red">
+              n
+            </Text>{" "}
+            to deny.
+          </Text>
+        </Box>
       ) : (
         <Box paddingX={1} justifyContent="space-between" width="100%">
           <Text dimColor>
@@ -974,7 +1084,7 @@ const SessionView = React.memo(() => {
               : "Session is inactive"}
           </Text>
           <Text dimColor>
-            {renderedLines.length > maxLines &&
+            {renderedLines.length > maxLinesCount &&
               `${scrollOffset + 1}-${scrollOffset + visibleLines.length} of ${renderedLines.length}`}
           </Text>
         </Box>
@@ -1005,6 +1115,7 @@ const HelpView = React.memo(() => {
     "Session View:",
     "  i - Enter input mode (chat with session)",
     "  a - Abort active session",
+    "  y / Y / n - Resolve pending permission",
     "  ↑/↓, jk   - Scroll message history",
     "  g / G     - Scroll to top / bottom",
     "",

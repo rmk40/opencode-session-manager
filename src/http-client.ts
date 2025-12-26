@@ -425,6 +425,49 @@ export class HTTPClient {
   }
 
   /**
+   * Resolve a permission request using SDK
+   */
+  async resolvePermission(
+    sessionId: string,
+    permissionId: string,
+    response: "once" | "always" | "reject",
+  ): AsyncResult<void> {
+    if (!this.sdkClient) {
+      return {
+        success: false,
+        error: {
+          code: "SDK_NOT_AVAILABLE",
+          message: "OpenCode SDK not available",
+          timestamp: Date.now(),
+          recoverable: false,
+        },
+      };
+    }
+
+    try {
+      await this.sdkClient.postSessionIdPermissionsPermissionId({
+        path: { id: sessionId, permissionID: permissionId },
+        body: { response },
+      });
+
+      return {
+        success: true,
+        data: undefined,
+      };
+    } catch (error) {
+      return {
+        success: false,
+        error: {
+          code: "NETWORK_ERROR",
+          message: error instanceof Error ? error.message : "Unknown SDK error",
+          timestamp: Date.now(),
+          recoverable: true,
+        },
+      };
+    }
+  }
+
+  /**
    * Test server health using SDK
    */
   async testHealth(): AsyncResult<boolean> {

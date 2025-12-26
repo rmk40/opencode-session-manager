@@ -18,6 +18,7 @@ import {
   SortMode,
   AppError,
   StateAction,
+  PermissionRequestEvent,
 } from "./types";
 import { connectionManager } from "./connection-manager";
 
@@ -176,6 +177,11 @@ interface AppContextType {
   // Session interaction functions
   sendMessage: (sessionId: string, message: string) => Promise<void>;
   abortSession: (sessionId: string) => Promise<void>;
+  resolvePermission: (
+    sessionId: string,
+    permissionId: string,
+    response: "once" | "always" | "reject",
+  ) => Promise<void>;
 }
 
 const AppContext = createContext<AppContextType | null>(null);
@@ -277,6 +283,33 @@ export function AppStateProvider({ children }: AppStateProviderProps) {
     }
   };
 
+  const resolvePermission = async (
+    sessionId: string,
+    permissionId: string,
+    response: "once" | "always" | "reject",
+  ): Promise<void> => {
+    try {
+      const result = await connectionManager.resolvePermission(
+        sessionId,
+        permissionId,
+        response,
+      );
+      if (!result.success) {
+        throw new Error(
+          result.error?.message || "Failed to resolve permission",
+        );
+      }
+    } catch (error) {
+      const appError: AppError = {
+        code: "SESSION_INTERACTION_ERROR",
+        message: `Failed to resolve permission: ${error instanceof Error ? error.message : "Unknown error"}`,
+        timestamp: Date.now(),
+        recoverable: true,
+      };
+      dispatch({ type: "SET_ERROR", error: appError });
+    }
+  };
+
   // Fetch session details when a session is selected
   useEffect(() => {
     if (state.selectedSessionId && state.currentView === "session") {
@@ -316,6 +349,12 @@ export function AppStateProvider({ children }: AppStateProviderProps) {
       batchedDispatch({ type: "REMOVE_SESSION", sessionId });
     };
 
+    const handlePermissionRequest = (event: PermissionRequestEvent) => {
+      // In TUI mode, we might want to trigger a desktop notification too
+      const { notificationTrigger } = require("./notifications");
+      notificationTrigger.handlePermissionRequest(event);
+    };
+
     const handleBatchUpdate = (actions: StateAction[]) => {
       batchedDispatch({ type: "BATCH", actions });
     };
@@ -331,6 +370,7 @@ export function AppStateProvider({ children }: AppStateProviderProps) {
     connectionManager.on("session_added", handleSessionAdded);
     connectionManager.on("session_updated", handleSessionUpdated);
     connectionManager.on("session_removed", handleSessionRemoved);
+    connectionManager.on("permission_request", handlePermissionRequest);
     connectionManager.on("batch_update", handleBatchUpdate);
     connectionManager.on("error", handleError);
 
@@ -357,6 +397,7 @@ export function AppStateProvider({ children }: AppStateProviderProps) {
       connectionManager.off("session_added", handleSessionAdded);
       connectionManager.off("session_updated", handleSessionUpdated);
       connectionManager.off("session_removed", handleSessionRemoved);
+      connectionManager.off("permission_request", handlePermissionRequest);
       connectionManager.off("batch_update", handleBatchUpdate);
       connectionManager.off("error", handleError);
 
@@ -376,6 +417,7 @@ export function AppStateProvider({ children }: AppStateProviderProps) {
     clearError,
     sendMessage,
     abortSession,
+    resolvePermission,
   };
 
   return (
