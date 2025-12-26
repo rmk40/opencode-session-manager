@@ -1020,35 +1020,6 @@ function formatTimestamp(timestamp: number): string {
   });
 }
 
-function wrapText(text: string, maxWidth: number): string[] {
-  if (!text) return [""];
-  if (maxWidth <= 0) return [text];
-
-  const lines: string[] = [];
-  let remaining = text;
-
-  while (remaining.length > maxWidth) {
-    let breakPoint = remaining.lastIndexOf(" ", maxWidth);
-    if (breakPoint <= 0) breakPoint = maxWidth;
-    lines.push(remaining.slice(0, breakPoint));
-    remaining = remaining.slice(breakPoint).trimStart();
-  }
-
-  if (remaining) lines.push(remaining);
-  return lines.length > 0 ? lines : [""];
-}
-
-function formatToolArgs(args: Record<string, unknown> | undefined): string {
-  if (!args || Object.keys(args).length === 0) return "";
-  const parts: string[] = [];
-  for (const [key, value] of Object.entries(args)) {
-    let valueStr = typeof value === "object" ? "[object]" : String(value);
-    if (valueStr.length > 50) valueStr = valueStr.slice(0, 47) + "...";
-    parts.push(`${key}: ${valueStr}`);
-  }
-  return parts.join(", ");
-}
-
 export default async function main() {
   if (!process.stdin.isTTY) {
     console.error("Error: stdin is not a TTY. Run in an interactive terminal.");
